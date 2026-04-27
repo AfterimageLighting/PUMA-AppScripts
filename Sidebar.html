@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: system-ui, Arial, sans-serif; margin: 12px; }
+      h2 { margin: 0 0 8px; font-size: 16px; }
+      .search { width: 100%; box-sizing: border-box; padding: 8px; margin: 6px 0 10px; }
+      .list { max-height: 60vh; overflow: auto; border: 1px solid #e5e7eb; border-radius: 8px; }
+      .item { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; cursor: pointer; }
+      .item:last-child { border-bottom: none; }
+      .item:hover { background: #f8fafc; }
+      .active { background: #eef2ff; font-weight: 600; }
+      .pending { background: #dbeafe; outline: 2px solid #93c5fd; }
+      .row { display: flex; gap: 6px; margin-top: 10px; }
+      button { padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; }
+      button:hover { background: #f9fafb; }
+      .muted { color: #6b7280; font-size: 12px; margin-top: 8px; }
+      .empty { color:#6b7280; padding: 10px; }
+    </style>
+  </head>
+  <body>
+    <h2>Sheet Navigator</h2>
+    <input id="q" class="search" placeholder="Filter sheets…" oninput="filterList()"/>
+
+    <div id="list" class="list"><div class="empty">Loading…</div></div>
+
+    <div class="row">
+      <button onclick="refresh()">Refresh</button>
+    </div>
+    <div class="muted">Click a sheet name to jump there.</div>
+
+    <script>
+      // These will be injected only if the template loaded correctly.
+      // If not, we'll fetch from server as a fallback.
+      const injectedSheets = (typeof sheets !== 'undefined') ? sheets : null;
+      const activeName = (typeof window.activeName !== 'undefined') ? window.activeName : null;
+
+      let source = Array.isArray(injectedSheets) ? injectedSheets : [];
+      let current = [...source];
+
+      function paint(list) {
+        const c = document.getElementById('list');
+        if (!list || !list.length) {
+          c.innerHTML = '<div class="empty">No sheets to show.</div>';
+          return;
+        }
+        c.innerHTML = '';
+        list.forEach(s => {
+          const div = document.createElement('div');
+          div.className = 'item' + ((activeName && s.name === activeName) ? ' active' : '');
+          div.textContent = s.name;
+          div.onclick = () => {
+            div.classList.add('pending');
+            google.script.run.goToSheetByName(s.name);
+          };
+          c.appendChild(div);
+        });
+      }
+
+      function filterList() {
+        const term = document.getElementById('q').value.toLowerCase().trim();
+        const base = current.length ? current : source;
+        const filtered = term ? base.filter(s => s.name.toLowerCase().includes(term)) : base;
+        paint(filtered);
+      }
+
+      function refresh() {
+        document.getElementById('list').innerHTML = '<div class="empty">Loading…</div>';
+        google.script.run.withSuccessHandler((sheets) => {
+          source = Array.isArray(sheets) ? sheets : [];
+          current = [...source];
+          document.getElementById('q').value = '';
+          paint(current);
+        }).getVisibleSheets();
+      }
+
+      // Initial load:
+      if (source.length) {
+        paint(source);
+      } else {
+        // If the template variables weren't injected (e.g., filename mismatch),
+        // fetch from server so the panel doesn't stay empty.
+        refresh();
+      }
+    </script>
+  </body>
+</html>
+
+
