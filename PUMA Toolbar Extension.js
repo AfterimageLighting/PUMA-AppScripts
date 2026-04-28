@@ -12,6 +12,7 @@ function onOpen(e) {
    * Dashboard
    * ========================= */
   const dashboardMenu = ui.createMenu('Dashboard')
+    .addItem('Add Back to Dashboard Links', 'addBackToDashboardLinks')
     .addItem('Refresh Dashboard', 'refreshDashboardProjectTrackers')
     .addItem('Update Pipeline', 'applyProbabilityFormattingToAllTrackers');
 
