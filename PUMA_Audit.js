@@ -1,5 +1,5 @@
 /**
- * PUMA AUDIT
+ * PUMA AUDIT v2
  * Builds a workbook inventory and risk report.
  *
  * Output sheet:
@@ -9,13 +9,16 @@
 const PUMA_AUDIT = {
   OUTPUT_SHEET: 'PUMA_AUDIT',
   DASHBOARD: 'Dashboard',
-  TRACKER_CONFIG: 'Tracker Config',
+  TRACKER_CONFIG_NAMES: ['Tracker Config', 'Tracker config'],
   OPEN_PROJECTS: 'Open Projects',
   HEADER_ROW: 1
 };
 
 function runPumaAudit() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const allSheetNames = ss.getSheets().map(sh => sh.getName());
+  const allSheetNameSet = new Set(allSheetNames.map(n => normalizeAuditLoose_(n)));
+
   const auditRows = [];
 
   auditRows.push([
@@ -27,6 +30,8 @@ function runPumaAudit() {
     'Frozen Rows',
     'Has A1 Dashboard Link',
     'Config Match',
+    'Expected Paired Sheet',
+    'Pair Exists',
     'Risk Level',
     'Notes'
   ]);
@@ -43,7 +48,14 @@ function runPumaAudit() {
     const normalizedProject = normalizeAuditProjectName_(name);
     const configMatch = configProjects.has(normalizedProject) ? 'YES' : 'NO';
 
-    const risk = getAuditRiskLevel_(name, classification, hasDashboardLink, configMatch);
+    const pairInfo = getExpectedPairInfo_(name, classification, allSheetNameSet);
+    const risk = getAuditRiskLevel_(
+      name,
+      classification,
+      hasDashboardLink,
+      shouldCheckConfigMatch_(classification) ? configMatch : '',
+      pairInfo.exists
+    );
 
     auditRows.push([
       timestamp,
@@ -54,6 +66,8 @@ function runPumaAudit() {
       sheet.getFrozenRows(),
       hasDashboardLink ? 'YES' : 'NO',
       shouldCheckConfigMatch_(classification) ? configMatch : '',
+      pairInfo.expectedName,
+      pairInfo.required ? (pairInfo.exists ? 'YES' : 'NO') : '',
       risk.level,
       risk.notes
     ]);
@@ -65,7 +79,7 @@ function runPumaAudit() {
 
 function getAuditTrackerConfigProjects_(ss) {
   const set = new Set();
-  const sh = ss.getSheetByName(PUMA_AUDIT.TRACKER_CONFIG);
+  const sh = getSheetByAnyName_(ss, PUMA_AUDIT.TRACKER_CONFIG_NAMES);
   if (!sh) return set;
 
   const values = sh.getDataRange().getValues();
@@ -103,8 +117,18 @@ function classifyPumaSheet_(sheetName) {
   const name = String(sheetName || '').trim();
 
   if (name === PUMA_AUDIT.DASHBOARD) return 'CORE_DASHBOARD';
-  if (name === PUMA_AUDIT.TRACKER_CONFIG) return 'CORE_CONFIG';
+  if (PUMA_AUDIT.TRACKER_CONFIG_NAMES.some(n => normalizeAuditLoose_(n) === normalizeAuditLoose_(name))) return 'CORE_CONFIG';
   if (name === PUMA_AUDIT.OPEN_PROJECTS) return 'CORE_PROJECT_LIST';
+
+  if (name === '- Project Tracker' || name === ' - Project Tracker') return 'TEMPLATE_TRACKER';
+  if (name === '- Tasks' || name === ' - Tasks') return 'TEMPLATE_TASKS';
+
+  if (/^pipeline$/i.test(name)) return 'CORE_DASHBOARD_SUPPORT';
+  if (/^<\s*85%$/i.test(name)) return 'CORE_PIPELINE_BUCKET';
+  if (/^85%$/i.test(name)) return 'CORE_PIPELINE_BUCKET';
+  if (/^100%$/i.test(name)) return 'CORE_PIPELINE_BUCKET';
+  if (/^new projects$/i.test(name)) return 'PROJECT_INTAKE';
+  if (/^po unmatched$/i.test(name)) return 'PO_PIPELINE_EXCEPTION';
 
   if (/project tracker$/i.test(name)) return 'PROJECT_TRACKER';
   if (/project track$/i.test(name)) return 'PROJECT_TRACKER_SHORT_NAME';
@@ -121,25 +145,62 @@ function classifyPumaSheet_(sheetName) {
   return 'UNKNOWN_REVIEW';
 }
 
-function hasBackToDashboardLink_(sheet) {
-  const cell = sheet.getRange('A1');
-  const rich = cell.getRichTextValue();
+function getExpectedPairInfo_(sheetName, classification, allSheetNameSet) {
+  const name = String(sheetName || '').trim();
 
-  if (rich && rich.getLinkUrl()) {
-    return String(cell.getDisplayValue() || '').toLowerCase().indexOf('dashboard') !== -1;
+  if (classification === 'PROJECT_TRACKER' || classification === 'PROJECT_TRACKER_SHORT_NAME') {
+    const base = normalizeAuditProjectDisplayName_(name);
+    const expectedName = `${base} Tasks`;
+    return {
+      required: true,
+      expectedName,
+      exists: allSheetNameSet.has(normalizeAuditLoose_(expectedName))
+    };
   }
 
-  return String(cell.getDisplayValue() || '').toLowerCase().indexOf('dashboard') !== -1;
+  if (classification === 'PROJECT_TASKS') {
+    const base = normalizeAuditProjectDisplayName_(name);
+    const expectedTrackerA = `${base} – Project Tracker`;
+    const expectedTrackerB = `${base} - Project Tracker`;
+    const expectedTrackerC = `${base} Project Tracker`;
+    const expectedTrackerD = `${base} Project Track`;
+
+    const exists =
+      allSheetNameSet.has(normalizeAuditLoose_(expectedTrackerA)) ||
+      allSheetNameSet.has(normalizeAuditLoose_(expectedTrackerB)) ||
+      allSheetNameSet.has(normalizeAuditLoose_(expectedTrackerC)) ||
+      allSheetNameSet.has(normalizeAuditLoose_(expectedTrackerD));
+
+    return {
+      required: true,
+      expectedName: expectedTrackerA,
+      exists
+    };
+  }
+
+  return {
+    required: false,
+    expectedName: '',
+    exists: true
+  };
 }
 
-function shouldCheckConfigMatch_(classification) {
-  return classification === 'PROJECT_TRACKER' ||
-         classification === 'PROJECT_TRACKER_SHORT_NAME' ||
-         classification === 'PROJECT_TASKS';
-}
+function getAuditRiskLevel_(sheetName, classification, hasDashboardLink, configMatch, pairExists) {
+  if (classification === 'TEMPLATE_TRACKER' || classification === 'TEMPLATE_TASKS') {
+    return {
+      level: 'LOW',
+      notes: 'Intentional hanging template sheet.'
+    };
+  }
 
-function getAuditRiskLevel_(sheetName, classification, hasDashboardLink, configMatch) {
   if (classification === 'PROJECT_TRACKER' || classification === 'PROJECT_TRACKER_SHORT_NAME') {
+    if (pairExists === false) {
+      return {
+        level: 'HIGH',
+        notes: 'Tracker sheet is missing its paired Tasks sheet.'
+      };
+    }
+
     if (!hasDashboardLink) {
       return {
         level: 'MEDIUM',
@@ -150,20 +211,34 @@ function getAuditRiskLevel_(sheetName, classification, hasDashboardLink, configM
     if (configMatch === 'NO') {
       return {
         level: 'HIGH',
-        notes: 'Tracker-like sheet does not appear to match Tracker Config.'
+        notes: 'Tracker-like sheet does not appear to match Tracker Config. May be historical/orphaned.'
+      };
+    }
+
+    if (classification === 'PROJECT_TRACKER_SHORT_NAME') {
+      return {
+        level: 'MEDIUM',
+        notes: 'Uses shortened Project Track naming; should standardize later.'
       };
     }
 
     return {
       level: 'LOW',
-      notes: 'Tracker sheet detected and linked.'
+      notes: 'Tracker sheet detected, linked, and paired.'
     };
   }
 
-  if (classification === 'PROJECT_TRACKER_SHORT_NAME') {
+  if (classification === 'PROJECT_TASKS') {
+    if (pairExists === false) {
+      return {
+        level: 'HIGH',
+        notes: 'Tasks sheet is missing its paired Project Tracker sheet.'
+      };
+    }
+
     return {
-      level: 'MEDIUM',
-      notes: 'Uses shortened Project Track naming; should standardize later.'
+      level: 'LOW',
+      notes: 'Tasks sheet detected and paired.'
     };
   }
 
@@ -187,7 +262,28 @@ function getAuditRiskLevel_(sheetName, classification, hasDashboardLink, configM
   };
 }
 
+function hasBackToDashboardLink_(sheet) {
+  const cell = sheet.getRange('A1');
+  const rich = cell.getRichTextValue();
+
+  if (rich && rich.getLinkUrl()) {
+    return String(cell.getDisplayValue() || '').toLowerCase().indexOf('dashboard') !== -1;
+  }
+
+  return String(cell.getDisplayValue() || '').toLowerCase().indexOf('dashboard') !== -1;
+}
+
+function shouldCheckConfigMatch_(classification) {
+  return classification === 'PROJECT_TRACKER' ||
+         classification === 'PROJECT_TRACKER_SHORT_NAME' ||
+         classification === 'PROJECT_TASKS';
+}
+
 function normalizeAuditProjectName_(value) {
+  return normalizeAuditProjectDisplayName_(value).toLowerCase();
+}
+
+function normalizeAuditProjectDisplayName_(value) {
   let name = String(value || '').trim();
 
   name = name
@@ -197,10 +293,36 @@ function normalizeAuditProjectName_(value) {
     .replace(/\s+Project Track$/i, '')
     .replace(/\s+Tasks$/i, '')
     .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+    .trim();
 
   return name;
+}
+
+function normalizeAuditLoose_(value) {
+  return String(value || '')
+    .replace(/[–—]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function getSheetByAnyName_(ss, names) {
+  for (let i = 0; i < names.length; i++) {
+    const sh = ss.getSheetByName(names[i]);
+    if (sh) return sh;
+  }
+
+  const looseMap = {};
+  ss.getSheets().forEach(sh => {
+    looseMap[normalizeAuditLoose_(sh.getName())] = sh;
+  });
+
+  for (let i = 0; i < names.length; i++) {
+    const match = looseMap[normalizeAuditLoose_(names[i])];
+    if (match) return match;
+  }
+
+  return null;
 }
 
 function findHeaderIndex_(headers, candidates) {
@@ -227,7 +349,7 @@ function writePumaAudit_(ss, rows) {
   header.setFontWeight('bold');
   header.setBackground('#d9ead3');
 
-  const riskCol = 9;
+  const riskCol = 11;
   const lastRow = sh.getLastRow();
 
   if (lastRow > 1) {
