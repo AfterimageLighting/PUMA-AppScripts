@@ -96,10 +96,10 @@ function getAuditTrackerConfigProjects_(ss) {
   const trackerIdx = findHeaderIndex_(headers, [
     'tracker sheet name',
     'trackername',
-    'tracker name'
+    'tracker name',
     'tracker',
     'tracker tab',
-    'tracker sheet'
+    'tracker sheet',
   ]);
 
   for (let r = 1; r < values.length; r++) {
@@ -299,10 +299,10 @@ function normalizeAuditProjectDisplayName_(value) {
   let name = String(value || '').trim();
 
   name = name
-    .replace(/\s*[--]\s*Project Tracker$/i, '')
+    .replace(/\s*[–-]\s*Project Tracker$/i, '')
     .replace(/\s+Project Tracker$/i, '')
     .replace(/\s+Project Track$/i, '')
-    .replace(/\s*[--]\s*Tasks$/i, '')
+    .replace(/\s*[–-]\s*Tasks$/i, '')
     .replace(/\s+Tasks$/i, '')
     .replace(/\s+/g, ' ')
     .trim();
