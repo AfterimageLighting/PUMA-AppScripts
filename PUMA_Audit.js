@@ -150,18 +150,28 @@ function getExpectedPairInfo_(sheetName, classification, allSheetNameSet) {
 
   if (classification === 'PROJECT_TRACKER' || classification === 'PROJECT_TRACKER_SHORT_NAME') {
     const base = normalizeAuditProjectDisplayName_(name);
-    const expectedName = `${base} Tasks`;
+
+    const expectedTaskA = `${base} - Tasks`;
+    const expectedTaskB = `${base} – Tasks`;
+    const expectedTaskC = `${base} Tasks`;
+
+    const exists =
+      allSheetNameSet.has(normalizeAuditLoose_(expectedTaskA)) ||
+      allSheetNameSet.has(normalizeAuditLoose_(expectedTaskB)) ||
+      allSheetNameSet.has(normalizeAuditLoose_(expectedTaskC));
+
     return {
       required: true,
-      expectedName,
-      exists: allSheetNameSet.has(normalizeAuditLoose_(expectedName))
+      expectedName: expectedTaskA,
+      exists
     };
   }
 
   if (classification === 'PROJECT_TASKS') {
     const base = normalizeAuditProjectDisplayName_(name);
-    const expectedTrackerA = `${base} – Project Tracker`;
-    const expectedTrackerB = `${base} - Project Tracker`;
+
+    const expectedTrackerA = `${base} - Project Tracker`;
+    const expectedTrackerB = `${base} – Project Tracker`;
     const expectedTrackerC = `${base} Project Tracker`;
     const expectedTrackerD = `${base} Project Track`;
 
