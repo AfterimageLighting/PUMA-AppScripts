@@ -320,6 +320,16 @@ function generatePumaLineId_() {
   return 'PUMA-LINE-' + Utilities.getUuid().slice(0, 8);
 }
 
+function debugSoftMatchHeaders() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getActiveSheet();
+  const values = sheet.getDataRange().getValues();
+
+  for (let r = 0; r < Math.min(values.length, 10); r++) {
+    Logger.log(`ROW ${r + 1}: ` + JSON.stringify(values[r]));
+  }
+}
+
 function writeSoftMatchTestReport_(ss, trackerName, results) {
   let sh = ss.getSheetByName(PUMA_SOFT_MATCH.OUTPUT_SHEET);
   if (!sh) sh = ss.insertSheet(PUMA_SOFT_MATCH.OUTPUT_SHEET);
