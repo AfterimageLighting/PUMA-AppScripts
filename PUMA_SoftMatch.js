@@ -52,13 +52,30 @@ function testSoftMatchOnActiveTracker() {
 
   // For v1 test, we compare tracker rows to themselves.
   // This confirms header detection, fingerprinting, and tier logic without touching quote imports yet.
-  const incomingQuoteRows = trackerRows.map(r => ({
+  const incomingQuoteRows = trackerRows.map((r, i) => {
+  let newRow = {
     type: r.type,
     manufacturer: r.manufacturer,
     partNumber: r.partNumber,
     qty: r.qty,
     sourceRow: r.sourceRow
-  }));
+  };
+
+  // 🟡 Simulate a PART CHANGE
+  if (i === 0) {
+    newRow.partNumber = r.partNumber + '_NEW';
+  }
+
+  // 🔵 Simulate a NEW TYPE
+  if (i === 1) {
+    newRow.type = r.type + '_ALT';
+  }
+
+  return newRow;
+});
+
+// 🟣 Simulate a REMOVED ROW
+incomingQuoteRows.pop();
 
   const results = softMatchRows_(trackerRows, incomingQuoteRows);
 
