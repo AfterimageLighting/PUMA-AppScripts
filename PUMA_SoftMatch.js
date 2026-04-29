@@ -12,7 +12,7 @@ const PUMA_SOFT_MATCH = {
   OUTPUT_SHEET: 'PUMA_SOFT_MATCH_TEST',
 
   // We will tune these once we test against a real tracker.
-  HEADER_ROW: 3,
+  HEADER_ROW: 1,
   DATA_START_ROW: 4,
 
   // Expected tracker headers / aliases.
@@ -23,7 +23,7 @@ const PUMA_SOFT_MATCH = {
     qty: ['Qty', 'QTY', 'Quantity'],
     status: ['Status'],
     po: ['PO', 'PO #', 'P.O.', 'PO Number'],
-    esd: ['ESD', 'Estimated Ship Date'],
+    esd: ['ESD', 'Estimated Ship Date', 'Estimated Ship Date (ESD)'],
     notes: ['Notes', 'Internal Notes'],
     pumaLineId: ['PUMA_LINE_ID'],
     fingerprint: ['PUMA_FINGERPRINT'],
