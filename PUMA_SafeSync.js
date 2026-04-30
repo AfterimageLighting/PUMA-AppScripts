@@ -1,37 +1,31 @@
 /**
- * PUMA SAFE SYNC
+ * PUMA SAFE SYNC v2
  *
- * Uses the soft match engine from PUMA_SoftMatch.js.
+ * Adds:
+ * - PUMA_SOURCE_TYPE
+ * - Safer zeroing rules
+ * - Review flag color coding
  *
- * Safe Sync does:
- * 1. Creates a backup of the active tracker
- * 2. Reads existing tracker rows
- * 3. Reads live quote rows from Tracker config
- * 4. Updates quote-driven fields only
- * 5. Preserves operational fields
- * 6. Zeroes dollar fields for quote rows removed from quote
- * 7. Appends brand-new quote lines at bottom
- *
- * Requires helper functions from PUMA_SoftMatch.js:
- * - readTrackerRowsForSoftMatch_
- * - readLiveQuoteRowsForTracker_
- * - softMatchRows_
- * - writeSoftMatchTestReport_
- * - generatePumaLineId_
- * - buildQuoteFingerprint_
+ * Source types:
+ * QUOTE   = came from quote sync
+ * PO_ONLY = exists in tracker but not quote; likely PO/import field add
+ * MANUAL  = manually added/internal row
+ * UNKNOWN = legacy row not yet classified
  */
 
 function safeSyncActiveTracker() {
   const ui = SpreadsheetApp.getUi();
 
   const confirm = ui.alert(
-    'PUMA Safe Sync',
+    'PUMA Safe Sync v2',
     'This will:\n\n' +
       '1. Create a backup of this tracker\n' +
       '2. Update quote-driven fields only\n' +
       '3. Preserve Status / PO / ESD / received dates\n' +
-      '4. Zero dollar fields for rows removed from quote\n' +
-      '5. Append new quote lines at the bottom\n\n' +
+      '4. Add PUMA_SOURCE_TYPE\n' +
+      '5. Zero dollar fields ONLY for quote-origin rows removed from quote\n' +
+      '6. Append new quote lines at the bottom\n' +
+      '7. Color-code review flags\n\n' +
       'Continue?',
     ui.ButtonSet.YES_NO
   );
@@ -63,26 +57,19 @@ function safeSyncActiveTracker() {
 
   let updated = 0;
   let zeroed = 0;
+  let flaggedOnly = 0;
 
   results.forEach(result => {
     const existing = result.existing;
 
-    // NEW_LINE has no existing tracker row yet.
-    // Those are handled later by appendNewQuoteLines_().
     if (!existing || !existing.sourceRow) return;
 
     const rowNum = existing.sourceRow;
+    const currentSourceType = getSourceTypeForRow_(tracker, rowNum, col);
 
-    // Always write identity and review flag.
-    tracker
-      .getRange(rowNum, col.pumaLineId)
+    tracker.getRange(rowNum, col.pumaLineId)
       .setValue(result.pumaLineId || existing.pumaLineId || generatePumaLineId_());
 
-    tracker
-      .getRange(rowNum, col.reviewFlag)
-      .setValue(result.reviewFlag || '');
-
-    // Refresh quote-driven fields only.
     if (result.tier === 'EXACT_MATCH' || result.tier === 'SOFT_MATCH_TYPE') {
       const inc = result.incoming || {};
 
@@ -98,59 +85,64 @@ function safeSyncActiveTracker() {
       if (col.totalCost > 0) tracker.getRange(rowNum, col.totalCost).setValue(inc.totalCost || 0);
       if (col.total > 0) tracker.getRange(rowNum, col.total).setValue(inc.total || 0);
 
+      tracker.getRange(rowNum, col.sourceType).setValue('QUOTE');
+      tracker.getRange(rowNum, col.reviewFlag).setValue(result.reviewFlag || '');
+
       updated++;
+      return;
     }
 
-    // Keep removed quote-origin rows, but zero pipeline dollars.
     if (result.tier === 'REMOVED_OR_SUPERSEDED') {
-      if (col.costPerUnit > 0) tracker.getRange(rowNum, col.costPerUnit).setValue(0);
-      if (col.costWithMargin > 0) tracker.getRange(rowNum, col.costWithMargin).setValue(0);
-      if (col.totalCost > 0) tracker.getRange(rowNum, col.totalCost).setValue(0);
-      if (col.total > 0) tracker.getRange(rowNum, col.total).setValue(0);
+      const sourceType = currentSourceType || inferSourceTypeFromRow_(tracker, rowNum, col);
 
-      tracker
-        .getRange(rowNum, col.reviewFlag)
-        .setValue('REMOVED FROM QUOTE - dollar fields zeroed');
-
-      zeroed++;
+      if (sourceType === 'QUOTE') {
+        zeroDollarFields_(tracker, rowNum, col);
+        tracker.getRange(rowNum, col.reviewFlag).setValue('REMOVED FROM QUOTE - dollar fields zeroed');
+        tracker.getRange(rowNum, col.sourceType).setValue('QUOTE');
+        zeroed++;
+      } else if (sourceType === 'PO_ONLY') {
+        tracker.getRange(rowNum, col.reviewFlag).setValue('PO_ONLY - not in quote; kept without zeroing');
+        tracker.getRange(rowNum, col.sourceType).setValue('PO_ONLY');
+        flaggedOnly++;
+      } else if (sourceType === 'MANUAL') {
+        tracker.getRange(rowNum, col.reviewFlag).setValue('MANUAL - not in quote; kept without zeroing');
+        tracker.getRange(rowNum, col.sourceType).setValue('MANUAL');
+        flaggedOnly++;
+      } else {
+        tracker.getRange(rowNum, col.reviewFlag).setValue('UNKNOWN SOURCE - review before zeroing');
+        tracker.getRange(rowNum, col.sourceType).setValue('UNKNOWN');
+        flaggedOnly++;
+      }
     }
   });
 
   const appended = appendNewQuoteLines_(tracker, results, col);
 
+  applyReviewFlagColors_(tracker, col);
+
   writeSoftMatchTestReport_(ss, tracker.getName() + ' SAFE SYNC', results);
 
   ui.alert(
-    'Safe Sync Complete\n\n' +
+    'Safe Sync v2 Complete\n\n' +
       `Tracker: ${tracker.getName()}\n` +
-      `Updated existing rows: ${updated}\n` +
+      `Updated quote rows: ${updated}\n` +
       `Zeroed removed quote rows: ${zeroed}\n` +
+      `Flagged non-quote rows: ${flaggedOnly}\n` +
       `Appended new quote rows: ${appended}\n\n` +
       'Backup created.\nReport updated.'
   );
 }
 
-/**
- * Creates a backup copy of the active tracker before writing.
- */
 function createTrackerBackup_(ss, tracker) {
   const name = tracker.getName();
-  const timestamp = Utilities.formatDate(
-    new Date(),
-    Session.getScriptTimeZone(),
-    'yyyy-MM-dd HH.mm'
-  );
+  const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH.mm');
 
   let backupName = `BACKUP - ${name} - ${timestamp}`;
+  if (backupName.length > 100) backupName = backupName.substring(0, 100);
 
-  // Sheet names max at 100 chars.
-  if (backupName.length > 100) {
-    backupName = backupName.substring(0, 100);
-  }
-
-  // Avoid rare duplicate backup name collision.
   let finalName = backupName;
   let i = 2;
+
   while (ss.getSheetByName(finalName)) {
     finalName = `${backupName.substring(0, 95)} ${i}`;
     i++;
@@ -158,18 +150,12 @@ function createTrackerBackup_(ss, tracker) {
 
   const copy = tracker.copyTo(ss);
   copy.setName(finalName);
-
   ss.setActiveSheet(tracker);
 }
 
-/**
- * Maps tracker columns by header names.
- * Returns 1-based column numbers.
- */
 function mapTrackerColumnsForSafeSync_(sheet) {
   const headerRow = 1;
-  const headers = sheet
-    .getRange(headerRow, 1, 1, sheet.getLastColumn())
+  const headers = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn())
     .getValues()[0]
     .map(h => String(h || '').trim());
 
@@ -202,52 +188,57 @@ function mapTrackerColumnsForSafeSync_(sheet) {
     totalCost: find(['Total Cost']),
     total: find(['Total']),
     pumaLineId: find(['PUMA_LINE_ID']),
-    reviewFlag: find(['PUMA_REVIEW_FLAG'])
+    reviewFlag: find(['PUMA_REVIEW_FLAG']),
+    sourceType: find(['PUMA_SOURCE_TYPE'])
   };
 
   const ensured = ensureSafeSyncWriteColumns_(sheet, col);
   col.pumaLineId = ensured.pumaLineId;
   col.reviewFlag = ensured.reviewFlag;
+  col.sourceType = ensured.sourceType;
 
   return col;
 }
 
-/**
- * Ensures PUMA_LINE_ID and PUMA_REVIEW_FLAG exist.
- */
 function ensureSafeSyncWriteColumns_(sheet, col) {
   let lastCol = sheet.getLastColumn();
   const headerRow = 1;
 
   if (col.pumaLineId === -1) {
     lastCol++;
-    sheet.getRange(headerRow, lastCol).setValue('PUMA_LINE_ID');
-    sheet.getRange(headerRow, lastCol).setFontWeight('bold').setBackground('#cfe2f3');
+    sheet.getRange(headerRow, lastCol).setValue('PUMA_LINE_ID')
+      .setFontWeight('bold')
+      .setBackground('#cfe2f3');
     col.pumaLineId = lastCol;
   }
 
   if (col.reviewFlag === -1) {
     lastCol++;
-    sheet.getRange(headerRow, lastCol).setValue('PUMA_REVIEW_FLAG');
-    sheet.getRange(headerRow, lastCol).setFontWeight('bold').setBackground('#fff2cc');
+    sheet.getRange(headerRow, lastCol).setValue('PUMA_REVIEW_FLAG')
+      .setFontWeight('bold')
+      .setBackground('#fff2cc');
     col.reviewFlag = lastCol;
+  }
+
+  if (col.sourceType === -1) {
+    lastCol++;
+    sheet.getRange(headerRow, lastCol).setValue('PUMA_SOURCE_TYPE')
+      .setFontWeight('bold')
+      .setBackground('#d9ead3');
+    col.sourceType = lastCol;
   }
 
   try {
     sheet.hideColumns(col.pumaLineId);
-  } catch (err) {
-    // Ignore if already hidden or protected.
-  }
+  } catch (err) {}
 
   return {
     pumaLineId: col.pumaLineId,
-    reviewFlag: col.reviewFlag
+    reviewFlag: col.reviewFlag,
+    sourceType: col.sourceType
   };
 }
 
-/**
- * Validates required columns before writing.
- */
 function validateSafeSyncColumns_(col) {
   const required = [
     'source',
@@ -257,30 +248,22 @@ function validateSafeSyncColumns_(col) {
     'manufacturer',
     'qty',
     'pumaLineId',
-    'reviewFlag'
+    'reviewFlag',
+    'sourceType'
   ];
 
   const missing = required.filter(key => !col[key] || col[key] < 1);
-
   if (missing.length) {
     throw new Error('Safe Sync missing required tracker columns: ' + missing.join(', '));
   }
 }
 
-/**
- * Appends NEW_LINE incoming quote rows to the bottom.
- * Designed to avoid duplicate appends on repeat runs.
- */
 function appendNewQuoteLines_(sheet, results, col) {
   let appendAt = sheet.getLastRow() + 1;
   let appended = 0;
 
   const existing = readTrackerRowsForSoftMatch_(sheet);
-  const existingFingerprints = new Set(
-    existing
-      .map(r => buildQuoteFingerprint_(r))
-      .filter(Boolean)
-  );
+  const existingFingerprints = new Set(existing.map(r => buildQuoteFingerprint_(r)).filter(Boolean));
 
   results.forEach(result => {
     if (result.tier !== 'NEW_LINE') return;
@@ -304,13 +287,9 @@ function appendNewQuoteLines_(sheet, results, col) {
     if (col.totalCost > 0) sheet.getRange(rowNum, col.totalCost).setValue(inc.totalCost || 0);
     if (col.total > 0) sheet.getRange(rowNum, col.total).setValue(inc.total || 0);
 
-    if (col.pumaLineId > 0) {
-      sheet.getRange(rowNum, col.pumaLineId).setValue(result.pumaLineId || generatePumaLineId_());
-    }
-
-    if (col.reviewFlag > 0) {
-      sheet.getRange(rowNum, col.reviewFlag).setValue('NEW FROM QUOTE - review');
-    }
+    sheet.getRange(rowNum, col.pumaLineId).setValue(result.pumaLineId || generatePumaLineId_());
+    sheet.getRange(rowNum, col.reviewFlag).setValue('NEW FROM QUOTE - review');
+    sheet.getRange(rowNum, col.sourceType).setValue('QUOTE');
 
     existingFingerprints.add(fingerprint);
     appended++;
@@ -319,18 +298,63 @@ function appendNewQuoteLines_(sheet, results, col) {
   return appended;
 }
 
-/**
- * Label for Source column.
- */
+function getSourceTypeForRow_(sheet, rowNum, col) {
+  if (!col.sourceType || col.sourceType < 1) return '';
+  return String(sheet.getRange(rowNum, col.sourceType).getValue() || '').trim().toUpperCase();
+}
+
+function inferSourceTypeFromRow_(sheet, rowNum, col) {
+  const source = col.source > 0 ? String(sheet.getRange(rowNum, col.source).getDisplayValue() || '') : '';
+  const po = col.poNumber > 0 ? String(sheet.getRange(rowNum, col.poNumber).getDisplayValue() || '') : '';
+  const type = col.type > 0 ? String(sheet.getRange(rowNum, col.type).getDisplayValue() || '') : '';
+
+  if (/quote/i.test(source)) return 'QUOTE';
+  if (po && !/quote/i.test(source)) return 'PO_ONLY';
+  if (!source && !po && type) return 'MANUAL';
+
+  return 'UNKNOWN';
+}
+
+function zeroDollarFields_(sheet, rowNum, col) {
+  if (col.costPerUnit > 0) sheet.getRange(rowNum, col.costPerUnit).setValue(0);
+  if (col.costWithMargin > 0) sheet.getRange(rowNum, col.costWithMargin).setValue(0);
+  if (col.totalCost > 0) sheet.getRange(rowNum, col.totalCost).setValue(0);
+  if (col.total > 0) sheet.getRange(rowNum, col.total).setValue(0);
+}
+
+function applyReviewFlagColors_(sheet, col) {
+  if (!col.reviewFlag || col.reviewFlag < 1) return;
+
+  const startRow = 4;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < startRow) return;
+
+  const range = sheet.getRange(startRow, col.reviewFlag, lastRow - startRow + 1, 1);
+  const values = range.getDisplayValues();
+
+  const backgrounds = values.map(row => {
+    const flag = String(row[0] || '').toUpperCase();
+
+    if (!flag) return ['#ffffff'];
+    if (flag.indexOf('NEW FROM QUOTE') !== -1) return ['#cfe2f3'];
+    if (flag.indexOf('REMOVED FROM QUOTE') !== -1) return ['#d9d2e9'];
+    if (flag.indexOf('CHANGED') !== -1 || flag.indexOf('VERIFY') !== -1) return ['#fff2cc'];
+    if (flag.indexOf('PO_ONLY') !== -1) return ['#fce5cd'];
+    if (flag.indexOf('MANUAL') !== -1) return ['#eadcf8'];
+    if (flag.indexOf('UNKNOWN') !== -1 || flag.indexOf('REVIEW') !== -1) return ['#f4cccc'];
+
+    return ['#ffffff'];
+  });
+
+  range.setBackgrounds(backgrounds);
+}
+
 function buildQuoteSourceLabel_(incoming) {
   if (incoming && incoming.quoteName) return incoming.quoteName;
   if (incoming && incoming.quoteTabName) return incoming.quoteTabName;
   return 'Quote Import';
 }
 
-/**
- * Header normalizer.
- */
 function normalizeSafeSyncHeader_(value) {
   return String(value || '')
     .toLowerCase()
