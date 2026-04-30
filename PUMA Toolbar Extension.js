@@ -26,7 +26,8 @@ function onOpen(e) {
       'syncAllConfiguredTrackers'
     )
     .addItem('Test Soft Match: Active Tracker vs Live Quotes', 'testSoftMatchActiveTrackerVsLiveQuotes')
-    .addItem('Controlled Write: Soft Match IDs + Flags', 'controlledWriteSoftMatchActiveTrackerVsLiveQuotes');
+    .addItem('Controlled Write: Soft Match IDs + Flags', 'controlledWriteSoftMatchActiveTrackerVsLiveQuotes')
+    .addItem('Safe Sync Active Tracker', 'safeSyncActiveTracker');
 
   /* =========================
    * ESD Sheet
