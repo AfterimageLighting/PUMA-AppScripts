@@ -587,3 +587,123 @@ function findQuoteHeaderRow_(values) {
 
   return null;
 }
+
+/**
+ * CONTROLLED WRITE v1
+ *
+ * Compares active tracker vs live quote rows, then writes ONLY:
+ * - PUMA_LINE_ID
+ * - PUMA_REVIEW_FLAG
+ *
+ * Does NOT overwrite tracker quote data.
+ * Does NOT overwrite operational fields.
+ * Does NOT append new quote rows yet.
+ */
+function controlledWriteSoftMatchActiveTrackerVsLiveQuotes() {
+  const ui = SpreadsheetApp.getUi();
+  const confirm = ui.alert(
+    'Controlled Soft Match Write',
+    'This will write ONLY PUMA_LINE_ID and PUMA_REVIEW_FLAG columns on the active tracker sheet. Continue?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (confirm !== ui.Button.YES) return;
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const tracker = ss.getActiveSheet();
+
+  if (!/project track/i.test(tracker.getName())) {
+    ui.alert('Open a Project Tracker tab first, then rerun.');
+    return;
+  }
+
+  const existingRows = readTrackerRowsForSoftMatch_(tracker);
+  const incomingRows = readLiveQuoteRowsForTracker_(ss, tracker.getName());
+
+  if (!incomingRows.length) {
+    ui.alert('No live quote rows found for this tracker from Tracker config.');
+    return;
+  }
+
+  const results = softMatchRows_(existingRows, incomingRows);
+
+  const writeCols = ensureSoftMatchWriteColumns_(tracker);
+
+  let written = 0;
+  let skippedNewLines = 0;
+
+  results.forEach(result => {
+    const existing = result.existing;
+
+    // NEW_LINE has no existing tracker row yet, so we do not write it in Phase 1.
+    if (!existing || !existing.sourceRow) {
+      if (result.tier === 'NEW_LINE') skippedNewLines++;
+      return;
+    }
+
+    const rowNum = existing.sourceRow;
+
+    tracker.getRange(rowNum, writeCols.pumaLineId).setValue(result.pumaLineId || existing.pumaLineId || generatePumaLineId_());
+
+    tracker.getRange(rowNum, writeCols.reviewFlag).setValue(result.reviewFlag || '');
+
+    written++;
+  });
+
+  writeSoftMatchTestReport_(ss, tracker.getName() + ' CONTROLLED WRITE', results);
+
+  ui.alert(
+    `Controlled write complete.\n\n` +
+    `Tracker: ${tracker.getName()}\n` +
+    `Existing tracker rows: ${existingRows.length}\n` +
+    `Incoming quote rows: ${incomingRows.length}\n` +
+    `Rows updated with PUMA_LINE_ID / Review Flag: ${written}\n` +
+    `New incoming rows not appended yet: ${skippedNewLines}\n\n` +
+    `Review report: ${PUMA_SOFT_MATCH.OUTPUT_SHEET}`
+  );
+}
+
+/**
+ * Ensures tracker has writable columns for controlled soft match data.
+ * Adds them to the far right if missing.
+ *
+ * Returns 1-based column numbers.
+ */
+function ensureSoftMatchWriteColumns_(sheet) {
+  const headerRow = PUMA_SOFT_MATCH.HEADER_ROW;
+  const lastCol = sheet.getLastColumn();
+
+  const headers = sheet
+    .getRange(headerRow, 1, 1, lastCol)
+    .getValues()[0]
+    .map(h => String(h || '').trim());
+
+  let pumaLineIdCol = findHeaderByAliases_(headers, ['PUMA_LINE_ID']);
+  let reviewFlagCol = findHeaderByAliases_(headers, ['PUMA_REVIEW_FLAG']);
+
+  let nextCol = lastCol + 1;
+
+  if (pumaLineIdCol === -1) {
+    sheet.getRange(headerRow, nextCol).setValue('PUMA_LINE_ID');
+    pumaLineIdCol = nextCol - 1;
+    nextCol++;
+  }
+
+  if (reviewFlagCol === -1) {
+    sheet.getRange(headerRow, nextCol).setValue('PUMA_REVIEW_FLAG');
+    reviewFlagCol = nextCol - 1;
+    nextCol++;
+  }
+
+  // Style the headers lightly.
+  sheet.getRange(headerRow, pumaLineIdCol + 1).setFontWeight('bold').setBackground('#cfe2f3');
+  sheet.getRange(headerRow, reviewFlagCol + 1).setFontWeight('bold').setBackground('#fff2cc');
+
+  // Hide PUMA_LINE_ID; leave review flag visible.
+  sheet.hideColumns(pumaLineIdCol + 1);
+
+  return {
+    pumaLineId: pumaLineIdCol + 1,
+    reviewFlag: reviewFlagCol + 1
+  };
+}
