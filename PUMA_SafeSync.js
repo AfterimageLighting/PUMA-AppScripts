@@ -69,6 +69,7 @@ function safeSyncActiveTracker() {
     `Safe Sync Complete\n\n` +
     `Updated rows: ${updated}\n` +
     `Zeroed rows: ${zeroed}\n\n` +
+    `Appended new rows: ${appended}\n\n` +
     `Backup created.\nReport updated.`
   );
 }
@@ -108,4 +109,53 @@ function mapTrackerColumnsForSafeSync_(sheet) {
     pumaLineId: find(['PUMA_LINE_ID']),
     reviewFlag: find(['PUMA_REVIEW_FLAG'])
   };
+}
+
+function appendNewQuoteLines_(sheet, results, col) {
+  const lastRow = sheet.getLastRow();
+  let appendAt = lastRow + 1;
+  let appended = 0;
+
+  // Build a quick set of existing fingerprints to prevent dupes on re-run
+  const existing = readTrackerRowsForSoftMatch_(sheet);
+  const existingFP = new Set(existing.map(r => buildQuoteFingerprint_(r)));
+
+  results.forEach(res => {
+    if (res.tier !== 'NEW_LINE') return;
+
+    const inc = res.incoming;
+    const fp = buildQuoteFingerprint_(inc);
+
+    // Skip if already present (idempotent runs)
+    if (existingFP.has(fp)) return;
+
+    const r = appendAt++;
+
+    sheet.getRange(r, col.type).setValue(inc.type || '');
+    sheet.getRange(r, col.manufacturer).setValue(inc.manufacturer || '');
+    sheet.getRange(r, col.partNumber).setValue(inc.partNumber || '');
+    sheet.getRange(r, col.description).setValue(inc.description || '');
+    sheet.getRange(r, col.qty).setValue(inc.qty || '');
+
+    // Dollars default to 0 for new items (until priced)
+    if (col.costPerUnit > 0) sheet.getRange(r, col.costPerUnit).setValue(0);
+    if (col.costWithMargin > 0) sheet.getRange(r, col.costWithMargin).setValue(0);
+    if (col.totalCost > 0) sheet.getRange(r, col.totalCost).setValue(0);
+    if (col.total > 0) sheet.getRange(r, col.total).setValue(0);
+
+    // Identity + flag
+    if (col.pumaLineId > 0) {
+      sheet.getRange(r, col.pumaLineId).setValue(res.pumaLineId || generatePumaLineId_());
+    }
+    if (col.reviewFlag > 0) {
+      sheet.getRange(r, col.reviewFlag).setValue('NEW FROM QUOTE - review & price');
+    }
+
+    appended++;
+  });
+
+  // Append new lines at the end (Phase 3)
+  const appended = appendNewQuoteLines_(tracker, results, col);
+
+  return appended;
 }
