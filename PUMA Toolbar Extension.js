@@ -24,7 +24,8 @@ function onOpen(e) {
     .addItem(
       'Sync ALL Configured Quotes → Trackers',
       'syncAllConfiguredTrackers'
-    );
+    )
+    .addItem('Test Soft Match: Active Tracker vs Live Quotes', 'testSoftMatchActiveTrackerVsLiveQuotes');
 
   /* =========================
    * ESD Sheet
