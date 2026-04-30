@@ -424,3 +424,166 @@ function writeSoftMatchTestReport_(ss, trackerName, results) {
     }));
   }
 }
+
+/**
+ * DRY RUN: Compare active tracker against live quote sheets from Tracker config.
+ * Does NOT write to the tracker.
+ */
+function testSoftMatchActiveTrackerVsLiveQuotes() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const tracker = ss.getActiveSheet();
+
+  if (!/project track/i.test(tracker.getName())) {
+    SpreadsheetApp.getUi().alert('Open a Project Tracker tab first, then rerun.');
+    return;
+  }
+
+  const existingRows = readTrackerRowsForSoftMatch_(tracker);
+  const incomingRows = readLiveQuoteRowsForTracker_(ss, tracker.getName());
+
+  if (!incomingRows.length) {
+    SpreadsheetApp.getUi().alert('No live quote rows found for this tracker from Tracker config.');
+    return;
+  }
+
+  const results = softMatchRows_(existingRows, incomingRows);
+  writeSoftMatchTestReport_(ss, tracker.getName() + ' vs LIVE QUOTES', results);
+
+  SpreadsheetApp.getUi().alert(
+    `Live quote soft match dry run complete.\n` +
+    `Existing tracker rows: ${existingRows.length}\n` +
+    `Incoming quote rows: ${incomingRows.length}\n` +
+    `Report: ${PUMA_SOFT_MATCH.OUTPUT_SHEET}`
+  );
+}
+
+/**
+ * Finds quote sheet IDs from Tracker config for the active tracker,
+ * opens each quote workbook, reads the FIRST tab, and returns quote rows.
+ */
+function readLiveQuoteRowsForTracker_(ss, trackerSheetName) {
+  const config = ss.getSheetByName('Tracker config') || ss.getSheetByName('Tracker Config');
+  if (!config) throw new Error('Tracker config sheet not found.');
+
+  const values = config.getDataRange().getValues();
+  if (values.length < 2) return [];
+
+  const headers = values[0].map(h => String(h || '').trim());
+
+  const trackerIdx = findHeaderByAliases_(headers, [
+    'Tracker Sheet Name',
+    'trackerName',
+    'Tracker Name',
+    'Tracker'
+  ]);
+
+  const quoteIdIdx = findHeaderByAliases_(headers, [
+    'Quote Sheet ID',
+    'Quote Sheet Id',
+    'Quote ID',
+    'Quote Spreadsheet ID'
+  ]);
+
+  const quoteNameIdx = findHeaderByAliases_(headers, [
+    'Quote Name',
+    'Quote'
+  ]);
+
+  if (trackerIdx === -1) throw new Error('Tracker config is missing Tracker Sheet Name column.');
+  if (quoteIdIdx === -1) throw new Error('Tracker config is missing Quote Sheet ID column.');
+
+  const incoming = [];
+  const trackerNorm = normalizeSoftMatchPart_(trackerSheetName);
+
+  for (let r = 1; r < values.length; r++) {
+    const configTracker = String(values[r][trackerIdx] || '').trim();
+    const quoteSheetId = String(values[r][quoteIdIdx] || '').trim();
+    const quoteName = quoteNameIdx !== -1 ? String(values[r][quoteNameIdx] || '').trim() : '';
+
+    if (!configTracker || !quoteSheetId) continue;
+    if (normalizeSoftMatchPart_(configTracker) !== trackerNorm) continue;
+
+    const quoteRows = readRowsFromQuoteSpreadsheet_(quoteSheetId, quoteName);
+    quoteRows.forEach(row => incoming.push(row));
+  }
+
+  return incoming;
+}
+
+/**
+ * Reads FIRST tab of quote spreadsheet.
+ */
+function readRowsFromQuoteSpreadsheet_(spreadsheetId, quoteName) {
+  const quoteSs = SpreadsheetApp.openById(spreadsheetId);
+  const quoteSheet = quoteSs.getSheets()[0]; // important: first tab only
+
+  const values = quoteSheet.getDataRange().getValues();
+  if (values.length < 2) return [];
+
+  const headerInfo = findQuoteHeaderRow_(values);
+  if (!headerInfo) return [];
+
+  const headers = values[headerInfo.rowIndex].map(h => String(h || '').trim());
+
+  const col = {
+    type: findHeaderByAliases_(headers, ['Type', 'Location', 'Type/Location']),
+    manufacturer: findHeaderByAliases_(headers, ['Manufacturer', 'MFG', 'Vendor']),
+    partNumber: findHeaderByAliases_(headers, ['Part Number', 'Part #', 'Part']),
+    description: findHeaderByAliases_(headers, ['Description', 'Item Description']),
+    qty: findHeaderByAliases_(headers, ['Quantity', 'Qty', 'QTY'])
+  };
+
+  const rows = [];
+
+  for (let r = headerInfo.rowIndex + 1; r < values.length; r++) {
+    const row = values[r];
+
+    const type = getCellByIndex_(row, col.type);
+    const manufacturer = getCellByIndex_(row, col.manufacturer);
+    const partNumber = getCellByIndex_(row, col.partNumber);
+    const description = getCellByIndex_(row, col.description);
+    const qty = getCellByIndex_(row, col.qty);
+
+    if (!type && !manufacturer && !partNumber && !description && !qty) continue;
+
+    rows.push({
+      type,
+      manufacturer,
+      partNumber,
+      description,
+      qty,
+      sourceRow: r + 1,
+      quoteName,
+      quoteSpreadsheetId: spreadsheetId,
+      quoteTabName: quoteSheet.getName()
+    });
+  }
+
+  return rows;
+}
+
+/**
+ * Finds the likely header row inside a quote sheet.
+ */
+function findQuoteHeaderRow_(values) {
+  for (let r = 0; r < Math.min(values.length, 25); r++) {
+    const headers = values[r].map(h => normalizeHeader_(h));
+
+    const hasPart = headers.indexOf(normalizeHeader_('Part Number')) !== -1 ||
+                    headers.indexOf(normalizeHeader_('Part #')) !== -1 ||
+                    headers.indexOf(normalizeHeader_('Part')) !== -1;
+
+    const hasQty = headers.indexOf(normalizeHeader_('Quantity')) !== -1 ||
+                   headers.indexOf(normalizeHeader_('Qty')) !== -1;
+
+    const hasMfg = headers.indexOf(normalizeHeader_('Manufacturer')) !== -1 ||
+                   headers.indexOf(normalizeHeader_('MFG')) !== -1 ||
+                   headers.indexOf(normalizeHeader_('Vendor')) !== -1;
+
+    if (hasPart && hasQty && hasMfg) {
+      return { rowIndex: r };
+    }
+  }
+
+  return null;
+}
