@@ -361,3 +361,43 @@ function normalizeSafeSyncHeader_(value) {
     .replace(/[^\w]+/g, '')
     .trim();
 }
+
+function safeSyncActiveTracker_INTERNAL_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const tracker = ss.getActiveSheet();
+
+  createTrackerBackup_(ss, tracker);
+
+  const existingRows = readTrackerRowsForSoftMatch_(tracker);
+  const incomingRows = readLiveQuoteRowsForTracker_(ss, tracker.getName());
+
+  if (!incomingRows.length) return;
+
+  const results = softMatchRows_(existingRows, incomingRows);
+  const col = mapTrackerColumnsForSafeSync_(tracker);
+
+  results.forEach(result => {
+    const existing = result.existing;
+    if (!existing || !existing.sourceRow) return;
+
+    const r = existing.sourceRow;
+
+    tracker.getRange(r, col.pumaLineId)
+      .setValue(result.pumaLineId || existing.pumaLineId || generatePumaLineId_());
+
+    if (result.tier === 'EXACT_MATCH' || result.tier === 'SOFT_MATCH_TYPE') {
+      const inc = result.incoming || {};
+
+      tracker.getRange(r, col.type).setValue(inc.type || '');
+      tracker.getRange(r, col.partNumber).setValue(inc.partNumber || '');
+      tracker.getRange(r, col.description).setValue(inc.description || '');
+      tracker.getRange(r, col.manufacturer).setValue(inc.manufacturer || '');
+      tracker.getRange(r, col.qty).setValue(inc.qty || '');
+
+      tracker.getRange(r, col.sourceType).setValue('QUOTE');
+    }
+  });
+
+  appendNewQuoteLines_(tracker, results, col);
+  applyReviewFlagColors_(tracker, col);
+}
