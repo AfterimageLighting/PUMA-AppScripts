@@ -515,36 +515,73 @@ function readLiveQuoteRowsForTracker_(ss, trackerSheetName) {
  */
 function readRowsFromQuoteSpreadsheet_(spreadsheetId, quoteName) {
   const quoteSs = SpreadsheetApp.openById(spreadsheetId);
-  const quoteSheet = quoteSs.getSheets()[0]; // important: first tab only
+  const quoteSheet = quoteSs.getSheets()[0]; // first tab only
 
   const values = quoteSheet.getDataRange().getValues();
-  if (values.length < 2) return [];
-
-  const headerInfo = findQuoteHeaderRow_(values);
-  if (!headerInfo) return [];
-
-  const headers = values[headerInfo.rowIndex].map(h => String(h || '').trim());
-
-  const col = {
-    type: findHeaderByAliases_(headers, ['Type', 'Location', 'Type/Location']),
-    manufacturer: findHeaderByAliases_(headers, ['Manufacturer', 'MFG', 'Vendor']),
-    partNumber: findHeaderByAliases_(headers, ['Part Number', 'Part #', 'Part']),
-    description: findHeaderByAliases_(headers, ['Description', 'Item Description']),
-    qty: findHeaderByAliases_(headers, ['Quantity', 'Qty', 'QTY'])
-  };
+  const backgrounds = quoteSheet.getDataRange().getBackgrounds();
 
   const rows = [];
 
-  for (let r = headerInfo.rowIndex + 1; r < values.length; r++) {
+  // Proven quote layout:
+  // A Qty, B Type, C Description, D Manufacturer, E Part Number,
+  // F Total, G Cost Per Unit with Margin, H Cost Per Unit, K Total Cost
+  const START_ROW = 10; // 1-based
+  const firstDataIndex = START_ROW - 1;
+
+  let blankStreak = 0;
+  const startBg = backgrounds[firstDataIndex] ? backgrounds[firstDataIndex][0] : '';
+
+  for (let r = firstDataIndex; r < values.length; r++) {
     const row = values[r];
+    const bg = backgrounds[r] ? backgrounds[r][0] : '';
 
-    const type = getCellByIndex_(row, col.type);
-    const manufacturer = getCellByIndex_(row, col.manufacturer);
-    const partNumber = getCellByIndex_(row, col.partNumber);
-    const description = getCellByIndex_(row, col.description);
-    const qty = getCellByIndex_(row, col.qty);
+    const qty = row[0];              // A
+    const type = row[1];             // B
+    const description = row[2];      // C
+    const manufacturer = row[3];     // D
+    const partNumber = row[4];       // E
+    const total = row[5];            // F
+    const costWithMargin = row[6];   // G
+    const costPerUnit = row[7];      // H
+    const totalCost = row[10];       // K
 
-    if (!type && !manufacturer && !partNumber && !description && !qty) continue;
+    const lineText = [
+      qty,
+      type,
+      description,
+      manufacturer,
+      partNumber,
+      total
+    ].join(' ').toLowerCase();
+
+    if (
+      lineText.includes('subt check') ||
+      lineText.includes('subtotal') ||
+      lineText.includes('sales tax') ||
+      lineText.includes('total check') ||
+      lineText.includes('preliminary estimate')
+    ) {
+      break;
+    }
+
+    const isBlankMain =
+      !qty &&
+      !type &&
+      !description &&
+      !manufacturer &&
+      !partNumber;
+
+    if (isBlankMain) {
+      blankStreak++;
+      if (blankStreak >= 3) break;
+      continue;
+    }
+
+    blankStreak = 0;
+
+    if (r > firstDataIndex && startBg && bg && bg !== startBg) {
+      break;
+    }
 
     rows.push({
       type,
@@ -552,6 +589,10 @@ function readRowsFromQuoteSpreadsheet_(spreadsheetId, quoteName) {
       partNumber,
       description,
       qty,
+      total,
+      costWithMargin,
+      costPerUnit,
+      totalCost,
       sourceRow: r + 1,
       quoteName,
       quoteSpreadsheetId: spreadsheetId,
