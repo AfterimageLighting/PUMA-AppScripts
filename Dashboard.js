@@ -47,7 +47,7 @@ function refreshDashboardProjectTrackers() {
     copyDashboardMetricsToQuote_(q, metrics);
    });
     
-   p.projectClosing = p.trackerExists ? '100%' : '< 85%';
+   p.projectClosing = getHighestProjectClosingPct_(p.quotes);
   });
 
   const projects = Object.keys(projectMap)
@@ -89,7 +89,7 @@ function refreshDashboardProjectTrackers() {
       values.push([
         '',
         '↳ ' + q.quoteName,
-        '',
+        q.closingPct || '',
         '',
         q.totalLineItems,
         q.totalSold,
@@ -131,6 +131,8 @@ function refreshDashboardProjectTrackers() {
   addRowGroupsForQuotesV4_(dashboard, rowTypes, startRow);
 
   dashboard.setFrozenRows(1);
+
+  colorDashboardClosingColumn_();
 }
 
 function readDashboardProjectsFromTrackerConfig_(configSheet) {
@@ -139,7 +141,7 @@ function readDashboardProjectsFromTrackerConfig_(configSheet) {
 
   if (lastRow < 2) return projectMap;
 
-  const values = configSheet.getRange(2, 1, lastRow - 1, 6).getValues();
+  const values = configSheet.getRange(2, 1, lastRow - 1, 8).getDisplayValues();
 
   values.forEach(row => {
     const enabled = row[0] === true || String(row[0]).toLowerCase() === 'true';
@@ -148,6 +150,8 @@ function readDashboardProjectsFromTrackerConfig_(configSheet) {
     const dateUpdated = row[3];
     const quoteName = String(row[4] || '').trim();
     const quoteId = String(row[5] || '').trim();
+    const closingPct = String(row[6] || '').trim();   // G
+    const closingNote = String(row[7] || '').trim();  // H
 
     if (!projectName) return;
 
@@ -166,7 +170,9 @@ function readDashboardProjectsFromTrackerConfig_(configSheet) {
       p.quotes.push({
         quoteName: quoteName || '(Unnamed Quote)',
         quoteId: quoteId,
-        enabled: enabled
+        enabled: enabled,
+        closingPct: closingPct,
+        closingNote: closingNote
       });
     }
   });
@@ -603,4 +609,50 @@ function copyDashboardMetricsToQuote_(quoteRecord, metrics) {
   quoteRecord.onOrder = metrics.onOrder;
   quoteRecord.received = metrics.received;
   quoteRecord.delivered = metrics.delivered;
+}
+
+function getHighestProjectClosingPct_(quotes) {
+  let best = '<85%';
+
+  quotes.forEach(q => {
+    const pct = String(q.closingPct || '').trim();
+
+    if (pct === '100%') {
+      best = '100%';
+      return;
+    }
+
+    if (pct === '>85%' && best !== '100%') {
+      best = '>85%';
+    }
+  });
+
+  return best;
+}
+
+function colorDashboardClosingColumn_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Dashboard');
+  if (!sheet) return;
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const range = sheet.getRange(2, 3, lastRow - 1, 1); // Column C
+  const values = range.getDisplayValues();
+
+  const backgrounds = values.map(row => {
+    const status = String(row[0] || '').trim();
+
+    if (status === '100%') return ['#d9ead3'];  // green
+    if (status === '>85%') return ['#fff2cc'];  // yellow
+    if (status === '<85%') return ['#f4cccc'];  // red
+
+    return ['#ffffff'];
+  });
+
+  range
+    .setBackgrounds(backgrounds)
+    .setHorizontalAlignment('center')
+    .setFontWeight('bold');
 }

@@ -9,11 +9,12 @@ function onOpen(e) {
   const menu = ui.createMenu('PUMA');
 
   /* =========================
-   * Dashboard
+   * Dashboard & Pipeline
    * ========================= */
-  const dashboardMenu = ui.createMenu('Dashboard')
+  const dashboardMenu = ui.createMenu('Dashboard & Pipeline')
     .addItem('Add Back to Dashboard Links', 'addBackToDashboardLinks')
     .addItem('Refresh Dashboard', 'refreshDashboardProjectTrackers')
+    .addItem('Update Quote Closing Statuses', 'updateTrackerConfigQuoteStatuses')
     .addItem('Update Pipeline', 'applyProbabilityFormattingToAllTrackers');
 
   /* =========================
