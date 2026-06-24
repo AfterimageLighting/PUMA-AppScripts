@@ -33,7 +33,7 @@ var PO_IMPORT_CONFIG = {
     costPerUnit: 'Cost Per Unit'
   },
 
-  TRACKER_OPTIONAL_HEADERS: ['Source', 'Description', 'Manufacturer'],
+  TRACKER_OPTIONAL_HEADERS: ['Project', 'Source', 'Description', 'Manufacturer'],
 
   LOCKED_STATUSES: {
     'Received': true,
@@ -42,6 +42,7 @@ var PO_IMPORT_CONFIG = {
 
   RAW_PROCESSED_COLUMN: 17, // Q
   RAW_ACTION_COLUMN: 18,    // R
+  RAW_TRACKER_OVERRIDE_COLUMN: 19, // S
   TIMESTAMP_FORMAT: 'M/d/yyyy h:mm:ss a'
 };
 
@@ -96,17 +97,36 @@ function applyRawPoImportToProjectTrackers() {
     };
 
     var normalizedProject = normalizeProjectName_(rawRecord.projectRaw);
+
     if (!normalizedProject) {
-      unmatched.push(makeUnmatchedRow_(rawRecord, 'Could not normalize project name'));
+      var reason = 'Could not normalize project name';
+      unmatched.push(makeUnmatchedRow_(rawRecord, reason));
+      stampProcessedRawRow_(rawSheet, rawRecord.sheetRow, 'Unmatched - ' + reason);
       continue;
     }
 
-    var trackerSheetName = normalizedProject + PO_IMPORT_CONFIG.TRACKER_SUFFIX;
+    var trackerOverride = String(
+      rawSheet.getRange(
+      rawRecord.sheetRow,
+      PO_IMPORT_CONFIG.RAW_TRACKER_OVERRIDE_COLUMN
+      ).getDisplayValue() || ''
+    ).trim();
+
+    var trackerOverride = String(
+     rawSheet.getRange(
+       rawRecord.sheetRow,
+       PO_IMPORT_CONFIG.RAW_TRACKER_OVERRIDE_COLUMN
+      ).getDisplayValue() || ''
+    ).trim();
+
+    var trackerSheetName = trackerOverride || (normalizedProject + PO_IMPORT_CONFIG.TRACKER_SUFFIX);
     var trackerSheet = ss.getSheetByName(trackerSheetName);
 
     if (!trackerSheet) {
-      unmatched.push(makeUnmatchedRow_(rawRecord, 'Tracker sheet not found: ' + trackerSheetName));
-      continue;
+     var reason = 'Tracker sheet not found: ' + trackerSheetName;
+     unmatched.push(makeUnmatchedRow_(rawRecord, reason));
+     stampProcessedRawRow_(rawSheet, rawRecord.sheetRow, 'Unmatched - ' + reason);
+     continue;
     }
 
     if (!usedRowsBySheet[trackerSheetName]) {
@@ -119,9 +139,21 @@ function applyRawPoImportToProjectTrackers() {
         trackerInfo = loadTrackerSheet_(trackerSheet);
         trackerCache[trackerSheetName] = trackerInfo;
       } catch (e) {
-        unmatched.push(makeUnmatchedRow_(rawRecord, 'Could not load tracker sheet: ' + e.message));
+        var reason = 'Could not load tracker sheet: ' + e.message;
+        unmatched.push(makeUnmatchedRow_(rawRecord, reason));
+        stampProcessedRawRow_(rawSheet, rawRecord.sheetRow, 'Unmatched - ' + reason);
         continue;
       }
+    }
+
+    var existingPo = trackerAlreadyHasPo_(trackerSheet, trackerInfo, rawRecord.poNumber);
+    if (existingPo && existingPo.found) {
+      stampProcessedRawRow_(
+       rawSheet,
+       rawRecord.sheetRow,
+       'Already in tracker - Row ' + existingPo.row
+      );
+      continue;
     }
 
     var match = findBestTrackerMatch_(trackerInfo, rawRecord, usedRowsBySheet[trackerSheetName]);
@@ -160,7 +192,9 @@ function applyRawPoImportToProjectTrackers() {
       continue;
     }
 
-    unmatched.push(makeUnmatchedRow_(rawRecord, 'Project found, but append failed'));
+    var finalReason = 'Project found, but no tracker match and append failed';
+    unmatched.push(makeUnmatchedRow_(rawRecord, finalReason));
+    stampProcessedRawRow_(rawSheet, rawRecord.sheetRow, 'Unmatched - ' + finalReason);
   }
 
   writeUnmatchedLog_(ss, unmatched);
@@ -244,10 +278,11 @@ function loadTrackerSheet_(sheet) {
  */
 function findTrackerHeaderRowIndex_(data) {
   var required = [
-    PO_IMPORT_CONFIG.TRACKER_HEADERS.project,
+    PO_IMPORT_CONFIG.TRACKER_HEADERS.source,
     PO_IMPORT_CONFIG.TRACKER_HEADERS.type,
     PO_IMPORT_CONFIG.TRACKER_HEADERS.partNumber,
-    PO_IMPORT_CONFIG.TRACKER_HEADERS.status
+    PO_IMPORT_CONFIG.TRACKER_HEADERS.status,
+    PO_IMPORT_CONFIG.TRACKER_HEADERS.poNumber
   ];
 
   for (var r = 0; r < Math.min(data.length, 10); r++) {
@@ -792,4 +827,26 @@ function hasCellValue_(row, idx) {
 function clearCellValidationIfNeeded_(sheet, row, col) {
   if (!col) return;
   sheet.getRange(row, col).clearDataValidations();
+}
+
+function trackerAlreadyHasPo_(sheet, trackerInfo, poNumber) {
+  if (!poNumber) return false;
+
+  var poCol = getColNum_(trackerInfo.headerMap, PO_IMPORT_CONFIG.TRACKER_HEADERS.poNumber);
+  if (!poCol) return false;
+
+  var targetKey = normalizePoKey_(poNumber);
+  var data = sheet.getDataRange().getDisplayValues();
+
+  for (var r = trackerInfo.headerRowIndex + 1; r < data.length; r++) {
+    var existingPo = data[r][poCol - 1];
+    if (normalizePoKey_(existingPo) === targetKey) {
+      return {
+        found: true,
+        row: r + 1
+      };
+    }
+  }
+
+  return false;
 }
