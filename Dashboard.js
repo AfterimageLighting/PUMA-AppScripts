@@ -38,16 +38,16 @@ function refreshDashboardProjectTrackers() {
     p.openTasks = countOpenTasksOnly_(tasksSheet);
     p.hyperlink = trackerSheet ? `${ss.getUrl()}#gid=${trackerSheet.getSheetId()}` : '';
 
-   const trackerMetrics = readTrackerMetricsBySource_(trackerSheet);
+    const trackerMetrics = readTrackerMetricsBySource_(trackerSheet);
 
-   copyDashboardMetricsToProject_(p, trackerMetrics.projectTotals);
+    copyDashboardMetricsToProject_(p, trackerMetrics.projectTotals);
 
-   p.quotes.forEach(q => {
-    const metrics = trackerMetrics.bySource[q.quoteName] || createEmptyDashboardMetrics_();
-    copyDashboardMetricsToQuote_(q, metrics);
-   });
-    
-   p.projectClosing = getHighestProjectClosingPct_(p.quotes);
+    p.quotes.forEach(q => {
+      const metrics = trackerMetrics.bySource[q.quoteName] || createEmptyDashboardMetrics_();
+      copyDashboardMetricsToQuote_(q, metrics);
+    });
+
+    p.projectClosing = getHighestProjectClosingPct_(p.quotes);
   });
 
   const projects = Object.keys(projectMap)
@@ -59,6 +59,7 @@ function refreshDashboardProjectTrackers() {
   const closingBackgrounds = [];
   const snapshotBackgrounds = [];
   const rowTypes = [];
+  const remainingFormulaRows = [];
 
   projects.forEach(p => {
     values.push([
@@ -69,14 +70,11 @@ function refreshDashboardProjectTrackers() {
       p.totalLineItems,
       p.totalSold,
       '',
-      p.toBeOrdered,
-      p.onOrder,
-      p.received,
-      p.delivered,
-      p.toBeOrderedPct,
-      p.onOrderPct,
-      p.receivedPct,
-      p.deliveredPct,
+      '',
+      '',
+      '',
+      '',
+      '',
       p.stageSnapshot
     ]);
 
@@ -86,24 +84,27 @@ function refreshDashboardProjectTrackers() {
     rowTypes.push('project');
 
     p.quotes.forEach(q => {
+      const closing = String(q.closingPct || '').trim();
+      const quoteTotal = toNumber_(q.quoteTotal);
+
       values.push([
         '',
         '↳ ' + q.quoteName,
-        q.closingPct || '',
+        closing,
         '',
         q.totalLineItems,
         q.totalSold,
-        q.quoteTotal,
-        q.toBeOrdered,
-        q.onOrder,
-        q.received,
-        q.delivered,
-        safePercent_(q.toBeOrdered, q.totalLineItems),
-        safePercent_(q.onOrder, q.totalLineItems),
-        safePercent_(q.received, q.totalLineItems),
-        safePercent_(q.delivered, q.totalLineItems),
+        quoteTotal,
+        closing === '<85%' ? quoteTotal : '',
+        closing === '>85%' ? quoteTotal : '',
+        closing === '100%' ? quoteTotal : '',
+        '',
+        '',
         q.enabled ? 'Enabled' : 'Disabled'
       ]);
+
+      const sheetRow = values.length + 1;
+      if (closing === '100%') remainingFormulaRows.push(sheetRow);
 
       richProjectCells.push([SpreadsheetApp.newRichTextValue().setText('').build()]);
       closingBackgrounds.push(['#ffffff']);
@@ -112,23 +113,61 @@ function refreshDashboardProjectTrackers() {
     });
   });
 
-  if (!values.length) {
-    formatDashboardSheetV4_(dashboard, 0);
-    return;
-  }
-
   const startRow = 2;
   const numRows = values.length;
-  const numCols = values[0].length;
+  const totalCols = 13;
 
-  dashboard.getRange(startRow, 1, numRows, numCols).setValues(values);
-  dashboard.getRange(startRow, 1, numRows, 1).setRichTextValues(richProjectCells);
-  dashboard.getRange(startRow, 3, numRows, 1).setBackgrounds(closingBackgrounds);
-  dashboard.getRange(startRow, 16, numRows, 1).setBackgrounds(snapshotBackgrounds);
+  if (numRows > 0) {
+    dashboard.getRange(startRow, 1, numRows, totalCols).setValues(values);
+    dashboard.getRange(startRow, 1, numRows, 1).setRichTextValues(richProjectCells);
+    dashboard.getRange(startRow, 3, numRows, 1).setBackgrounds(closingBackgrounds);
+    dashboard.getRange(startRow, 13, numRows, 1).setBackgrounds(snapshotBackgrounds);
 
-  formatDashboardSheetV4_(dashboard, numRows);
+    remainingFormulaRows.forEach(row => {
+      dashboard.getRange(row, 12)
+        .setFormula(`=IF(J${row}="","",MAX(0,J${row}-N(K${row})))`);
+    });
+  }
+
+  const lastDataRow = numRows > 0 ? startRow + numRows - 1 : 1;
+  const totalsRow = lastDataRow + 1;
+
+  dashboard.getRange(totalsRow, 1, 1, totalCols).setValues([[
+    'PIPELINE TOTALS',
+    new Date(),
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    ''
+  ]]);
+
+  dashboard.getRange(totalsRow, 2).setNumberFormat('MM/dd/yyyy');
+
+  if (numRows > 0) {
+    dashboard.getRange(totalsRow, 8).setFormula(`=SUM(H${startRow}:H${lastDataRow})`);
+    dashboard.getRange(totalsRow, 9).setFormula(`=SUM(I${startRow}:I${lastDataRow})`);
+    dashboard.getRange(totalsRow, 10).setFormula(`=SUM(J${startRow}:J${lastDataRow})`);
+    dashboard.getRange(totalsRow, 11).setFormula(`=SUM(K${startRow}:K${lastDataRow})`);
+    dashboard.getRange(totalsRow, 12).setFormula(`=SUM(L${startRow}:L${lastDataRow})`);
+  } else {
+    dashboard.getRange(totalsRow, 8, 1, 5).setValues([[0, 0, 0, 0, 0]]);
+  }
+
+  formatDashboardSheetV4_(dashboard, numRows, totalsRow);
   applyProjectQuoteRowStylingV4_(dashboard, rowTypes, startRow);
   addRowGroupsForQuotesV4_(dashboard, rowTypes, startRow);
+
+  dashboard.getRange(totalsRow, 1, 1, totalCols)
+    .setFontWeight('bold')
+    .setBackground('#d9d9d9')
+    .setBorder(true, true, true, true, true, true, '#666666', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
 
   dashboard.setFrozenRows(1);
 
@@ -217,14 +256,11 @@ function buildDashboardHeaderV4_(dashboard) {
     'Total Line Items',
     'Total Sold',
     'Quote Total',
-    'To Be Ordered',
-    'On Order',
-    'Received',
-    'Delivered',
-    'TB Ordered %',
-    'On Order %',
-    'Received %',
-    'Delivered %',
+    '<85%',
+    '>85%',
+    '100%',
+    'Billed',
+    'Remaining Revenue',
     'Stage Snapshot'
   ]];
 
@@ -325,17 +361,19 @@ function formatPctText_(pct) {
 
 
 function applyProjectQuoteRowStylingV4_(dashboard, rowTypes, startRow) {
+  const totalCols = 13;
+
   for (let i = 0; i < rowTypes.length; i++) {
     const row = startRow + i;
 
     if (rowTypes[i] === 'project') {
-      dashboard.getRange(row, 1, 1, 16).setFontWeight('bold');
+      dashboard.getRange(row, 1, 1, totalCols).setFontWeight('bold');
       dashboard.getRange(row, 2).setBackground('#f7f9fc');
-      dashboard.getRange(row, 4, 1, 13).setBackground('#f7f9fc');
+      dashboard.getRange(row, 4, 1, 4).setBackground('#f7f9fc');
     } else {
       dashboard.getRange(row, 2).setFontStyle('italic');
       dashboard.getRange(row, 2).setHorizontalAlignment('left');
-      dashboard.getRange(row, 1, 1, 16).setFontSize(9);
+      dashboard.getRange(row, 1, 1, totalCols).setFontSize(9);
     }
   }
 }
@@ -372,45 +410,40 @@ function addRowGroupsForQuotesV4_(dashboard, rowTypes, startRow) {
 }
 
 
-function formatDashboardSheetV4_(dashboard, numRows) {
-  const totalCols = 16;
-  const lastRow = Math.max(2, numRows + 1);
+function formatDashboardSheetV4_(dashboard, numRows, totalsRow) {
+  const totalCols = 13;
   const bodyRows = Math.max(1, numRows);
+  const lastDataRow = Math.max(1, numRows + 1);
 
-  dashboard.getRange(2, 1, bodyRows, totalCols)
+  dashboard.getRange(2, 1, Math.max(1, totalsRow - 1), totalCols)
     .setVerticalAlignment('middle')
     .setFontSize(10)
     .setWrap(false);
 
-  dashboard.getRange(2, 3, bodyRows, 2).setHorizontalAlignment('center');
-  dashboard.getRange(2, 8, bodyRows, 4).setHorizontalAlignment('center');
-  dashboard.getRange(2, 12, bodyRows, 4).setHorizontalAlignment('center');
-  dashboard.getRange(2, 6, bodyRows, 2).setHorizontalAlignment('right');
+  if (numRows > 0) {
+    dashboard.getRange(2, 3, bodyRows, 2).setHorizontalAlignment('center');
+    dashboard.getRange(2, 8, bodyRows, 5).setHorizontalAlignment('right');
 
-  dashboard.getRange(2, 5, bodyRows, 1).setNumberFormat('#,##0');
-  dashboard.getRange(2, 6, bodyRows, 2).setNumberFormat('$#,##0.00');
-  dashboard.getRange(2, 8, bodyRows, 4).setNumberFormat('#,##0');
-  dashboard.getRange(2, 12, bodyRows, 4).setNumberFormat('0%');
+    dashboard.getRange(2, 5, bodyRows, 1).setNumberFormat('#,##0');
+    dashboard.getRange(2, 6, bodyRows, 7).setNumberFormat('$#,##0.00');
+  }
 
-  dashboard.getRange(1, 1, lastRow, totalCols)
+  dashboard.getRange(1, 1, totalsRow, totalCols)
     .setBorder(true, true, true, true, true, true, '#d0d0d0', SpreadsheetApp.BorderStyle.SOLID);
 
   dashboard.setColumnWidth(1, 220);
-  dashboard.setColumnWidth(2, 290);
+  dashboard.setColumnWidth(2, 400);
   dashboard.setColumnWidth(3, 110);
   dashboard.setColumnWidth(4, 85);
   dashboard.setColumnWidth(5, 105);
   dashboard.setColumnWidth(6, 110);
   dashboard.setColumnWidth(7, 110);
-  dashboard.setColumnWidth(8, 95);
-  dashboard.setColumnWidth(9, 85);
-  dashboard.setColumnWidth(10, 85);
-  dashboard.setColumnWidth(11, 85);
-  dashboard.setColumnWidth(12, 90);
-  dashboard.setColumnWidth(13, 85);
-  dashboard.setColumnWidth(14, 85);
-  dashboard.setColumnWidth(15, 85);
-  dashboard.setColumnWidth(16, 250);
+  dashboard.setColumnWidth(8, 105);
+  dashboard.setColumnWidth(9, 105);
+  dashboard.setColumnWidth(10, 105);
+  dashboard.setColumnWidth(11, 110);
+  dashboard.setColumnWidth(12, 120);
+  dashboard.setColumnWidth(13, 300);
 
   try {
     const bandings = dashboard.getBandings();
@@ -418,22 +451,34 @@ function formatDashboardSheetV4_(dashboard, numRows) {
   } catch (e) {}
 
   if (numRows > 0) {
-    dashboard.getRange(1, 1, lastRow, totalCols)
+    dashboard.getRange(1, 1, lastDataRow, totalCols)
       .applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY);
 
-    dashboard.getRange(1, 1, 1, totalCols)
-      .setFontWeight('bold')
-      .setBackground('#d9e2f3')
-      .setHorizontalAlignment('center');
+    dashboard.getRange(1, 8, lastDataRow, 1).setBackground('#f4cccc');
+    dashboard.getRange(1, 9, lastDataRow, 1).setBackground('#fff2cc');
+    dashboard.getRange(1, 10, lastDataRow, 1).setBackground('#d9ead3');
   }
+
+  dashboard.getRange(1, 1, 1, totalCols)
+    .setFontWeight('bold')
+    .setBackground('#d9e2f3')
+    .setHorizontalAlignment('center');
+
+  dashboard.getRange(1, 8).setBackground('#f4cccc');
+  dashboard.getRange(1, 9).setBackground('#fff2cc');
+  dashboard.getRange(1, 10).setBackground('#d9ead3');
+
+  dashboard.getRange(totalsRow, 6, 1, 7).setNumberFormat('$#,##0.00');
 
   try {
     if (dashboard.getFilter()) dashboard.getFilter().remove();
   } catch (e) {}
 
-  try {
-    dashboard.getRange(1, 1, lastRow, totalCols).createFilter();
-  } catch (e) {}
+  if (numRows > 0) {
+    try {
+      dashboard.getRange(1, 1, lastDataRow, totalCols).createFilter();
+    } catch (e) {}
+  }
 }
 
 
@@ -655,4 +700,131 @@ function colorDashboardClosingColumn_() {
     .setBackgrounds(backgrounds)
     .setHorizontalAlignment('center')
     .setFontWeight('bold');
+}
+
+/**
+ * Expands every grouped row on the Dashboard.
+ */
+function expandDashboard() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName('Dashboard');
+
+  if (!sheet) throw new Error('Sheet "Dashboard" not found.');
+  sheet.expandAllRowGroups();
+}
+
+/**
+ * Collapses every grouped row on the Dashboard.
+ */
+function collapseDashboard() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName('Dashboard');
+
+  if (!sheet) throw new Error('Sheet "Dashboard" not found.');
+  sheet.collapseAllRowGroups();
+}
+
+/**
+ * Prepares the Dashboard for a pipeline meeting.
+ */
+function switchToPipelineView() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName('Dashboard');
+
+  if (!sheet) throw new Error('Sheet "Dashboard" not found.');
+
+  // Start from a known visibility state.
+  sheet.showColumns(1, 13);
+
+  // Pipeline view shows A:C and H:M.
+  sheet.hideColumns(4, 4); // Hide D:G
+
+  setPipelineViewHeaders_(sheet);
+
+  // Pipeline-friendly widths.
+  sheet.setColumnWidth(1, 230);
+  sheet.setColumnWidth(2, 400);
+  sheet.setColumnWidth(3, 110);
+  sheet.setColumnWidth(8, 105);
+  sheet.setColumnWidth(9, 105);
+  sheet.setColumnWidth(10, 105);
+  sheet.setColumnWidth(11, 110);
+  sheet.setColumnWidth(12, 125);
+  sheet.setColumnWidth(13, 300);
+
+  sheet.expandAllRowGroups();
+  sheet.setActiveSelection('A1');
+}
+
+/**
+ * Restores the operations-focused Dashboard view.
+ */
+function switchToDashboardView() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName('Dashboard');
+
+  if (!sheet) throw new Error('Sheet "Dashboard" not found.');
+
+  // Start from a known visibility state.
+  sheet.showColumns(1, 13);
+
+  // Dashboard view shows A:G and M.
+  sheet.hideColumns(8, 5); // Hide H:L
+
+  setDashboardViewHeaders_(sheet);
+
+  // Dashboard-friendly widths.
+  sheet.setColumnWidth(1, 220);
+  sheet.setColumnWidth(2, 290);
+  sheet.setColumnWidth(3, 110);
+  sheet.setColumnWidth(4, 85);
+  sheet.setColumnWidth(5, 105);
+  sheet.setColumnWidth(6, 110);
+  sheet.setColumnWidth(7, 110);
+  sheet.setColumnWidth(13, 250);
+
+  sheet.collapseAllRowGroups();
+  sheet.setActiveSelection('A1');
+}
+
+/**
+ * Applies the concise headers used during pipeline meetings.
+ */
+function setPipelineViewHeaders_(sheet) {
+  sheet.getRange(1, 1, 1, 13).setValues([[
+    'Project',
+    'Quote',
+    'Closing',
+    'Open Tasks',
+    'Items',
+    'Sold',
+    'Quote Total',
+    '<85%',
+    '>85%',
+    '100%',
+    'Billed',
+    'Remaining',
+    'Stage Snapshot'
+  ]]);
+}
+
+/**
+ * Applies the concise headers used for the operations Dashboard.
+ */
+function setDashboardViewHeaders_(sheet) {
+  sheet.getRange(1, 1, 1, 13).setValues([[
+    'Project',
+    'Quote',
+    'Closing',
+    'Open Tasks',
+    'Items',
+    'Sold',
+    'Quote Total',
+    '<85%',
+    '>85%',
+    '100%',
+    'Billed',
+    'Remaining',
+    'Stage Snapshot'
+  ]]);
 }

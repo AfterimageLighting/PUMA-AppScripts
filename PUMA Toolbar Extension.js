@@ -12,7 +12,12 @@ function onOpen(e) {
    * Dashboard & Pipeline
    * ========================= */
   const dashboardMenu = ui.createMenu('Dashboard & Pipeline')
-    .addItem('Add Back to Dashboard Links', 'addBackToDashboardLinks')
+    .addItem('Switch to Pipeline View', 'switchToPipelineView')
+    .addItem('Switch to Dashboard View', 'switchToDashboardView')
+    .addSeparator()
+    .addItem('Expand ALL Projects', 'expandDashboard')
+    .addItem('Collapse All Projects', 'collapseDashboard')
+    .addSeparator()
     .addItem('Refresh Dashboard', 'refreshDashboardProjectTrackers')
     .addItem('Update Quote Closing Statuses', 'updateTrackerConfigQuoteStatuses')
     .addItem('Update Pipeline', 'applyProbabilityFormattingToAllTrackers');
