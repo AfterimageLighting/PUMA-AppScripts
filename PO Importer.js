@@ -14,6 +14,7 @@ var PO_IMPORT_CONFIG = {
     project: 'project_raw',
     poNumber: 'po_number',
     itemName: 'item_name',
+    itemType: 'item_type',
     description: 'description',
     qty: 'qty',
     unitCost: 'unit_cost',
@@ -90,6 +91,7 @@ function applyRawPoImportToProjectTrackers() {
       projectRaw: getCellByHeader_(row, rawHeaderMap, PO_IMPORT_CONFIG.RAW_HEADERS.project),
       poNumber: String(getCellByHeader_(row, rawHeaderMap, PO_IMPORT_CONFIG.RAW_HEADERS.poNumber) || '').trim(),
       itemName: String(getCellByHeader_(row, rawHeaderMap, PO_IMPORT_CONFIG.RAW_HEADERS.itemName) || '').trim(),
+      itemType: String(getCellByHeader_(row, rawHeaderMap, PO_IMPORT_CONFIG.RAW_HEADERS.itemType) || '').trim(),
       description: String(getCellByHeader_(row, rawHeaderMap, PO_IMPORT_CONFIG.RAW_HEADERS.description) || '').trim(),
       qty: getCellByHeader_(row, rawHeaderMap, PO_IMPORT_CONFIG.RAW_HEADERS.qty),
       unitCost: getCellByHeader_(row, rawHeaderMap, PO_IMPORT_CONFIG.RAW_HEADERS.unitCost),
@@ -107,15 +109,8 @@ function applyRawPoImportToProjectTrackers() {
 
     var trackerOverride = String(
       rawSheet.getRange(
-      rawRecord.sheetRow,
-      PO_IMPORT_CONFIG.RAW_TRACKER_OVERRIDE_COLUMN
-      ).getDisplayValue() || ''
-    ).trim();
-
-    var trackerOverride = String(
-     rawSheet.getRange(
-       rawRecord.sheetRow,
-       PO_IMPORT_CONFIG.RAW_TRACKER_OVERRIDE_COLUMN
+        rawRecord.sheetRow,
+        PO_IMPORT_CONFIG.RAW_TRACKER_OVERRIDE_COLUMN
       ).getDisplayValue() || ''
     ).trim();
 
@@ -146,12 +141,12 @@ function applyRawPoImportToProjectTrackers() {
       }
     }
 
-    var existingPo = trackerAlreadyHasPo_(trackerSheet, trackerInfo, rawRecord.poNumber);
-    if (existingPo && existingPo.found) {
+    var existingPoLine = trackerAlreadyHasPoLine_(trackerSheet, trackerInfo, rawRecord);
+    if (existingPoLine && existingPoLine.found) {
       stampProcessedRawRow_(
-       rawSheet,
-       rawRecord.sheetRow,
-       'Already in tracker - Row ' + existingPo.row
+        rawSheet,
+        rawRecord.sheetRow,
+        'Already in tracker - Row ' + existingPoLine.row
       );
       continue;
     }
@@ -439,7 +434,6 @@ function applyMatchToTrackerRow_(sheet, trackerInfo, match, rawRecord, poPdfMap)
 function appendRawRecordToTracker_(sheet, trackerInfo, rawRecord, poPdfMap) {
   var headerMap = trackerInfo.headerMap;
   var poPdfFound = true;
-
   var projectCol = getColNum_(headerMap, PO_IMPORT_CONFIG.TRACKER_HEADERS.project);
   var sourceCol = getColNum_(headerMap, PO_IMPORT_CONFIG.TRACKER_HEADERS.source);
   var typeCol = getColNum_(headerMap, PO_IMPORT_CONFIG.TRACKER_HEADERS.type);
@@ -453,50 +447,31 @@ function appendRawRecordToTracker_(sheet, trackerInfo, rawRecord, poPdfMap) {
 
   var insertAfterRow = findLastRealTrackerDataRow_(sheet, trackerInfo);
   sheet.insertRowAfter(insertAfterRow);
-
   var targetRow = insertAfterRow + 1;
+  var lastCol = Math.max(sheet.getLastColumn(), 1);
 
-  // Clear inherited validations across the new row
-  sheet.getRange(targetRow, 1, 1, sheet.getLastColumn()).clearDataValidations();
-
-  if (projectCol) {
-    sheet.getRange(targetRow, projectCol).setValue(normalizeProjectName_(rawRecord.projectRaw));
+  if (insertAfterRow >= 1) {
+    sheet.getRange(insertAfterRow, 1, 1, lastCol).copyTo(
+      sheet.getRange(targetRow, 1, 1, lastCol),
+      SpreadsheetApp.CopyPasteType.PASTE_FORMAT,
+      false
+    );
   }
 
-  if (sourceCol) {
-    sheet.getRange(targetRow, sourceCol).setValue('PO Import');
-  }
+  var rowValues = new Array(lastCol).fill('');
+  setRowValueByCol_(rowValues, projectCol, normalizeProjectName_(rawRecord.projectRaw));
+  setRowValueByCol_(rowValues, sourceCol, 'PO Import - Unmatched');
+  setRowValueByCol_(rowValues, typeCol, rawRecord.itemType || 'PO Import Item');
+  setRowValueByCol_(rowValues, partCol, rawRecord.itemName);
+  setRowValueByCol_(rowValues, descCol, rawRecord.description);
+  setRowValueByCol_(rowValues, manufacturerCol, rawRecord.vendor);
+  setRowValueByCol_(rowValues, qtyCol, rawRecord.qty);
+  setRowValueByCol_(rowValues, statusCol, 'Ordered');
+  setRowValueByCol_(rowValues, costCol, rawRecord.unitCost);
 
-  if (typeCol && rawRecord.description) {
-    sheet.getRange(targetRow, typeCol).setValue(rawRecord.description);
-  }
-
-  if (partCol && rawRecord.itemName) {
-    sheet.getRange(targetRow, partCol).setValue(rawRecord.itemName);
-  }
-
-  if (descCol) {
-    var longDesc = buildTrackerDescriptionFromRaw_(rawRecord);
-    if (longDesc) {
-      sheet.getRange(targetRow, descCol).setValue(longDesc);
-    }
-  }
-
-  if (manufacturerCol && rawRecord.vendor) {
-    sheet.getRange(targetRow, manufacturerCol).setValue(rawRecord.vendor);
-  }
-
-  if (qtyCol && rawRecord.qty !== '' && rawRecord.qty != null) {
-    sheet.getRange(targetRow, qtyCol).setValue(rawRecord.qty);
-  }
-
-  if (statusCol) {
-    sheet.getRange(targetRow, statusCol).setValue('Ordered');
-  }
-
-  if (costCol && rawRecord.unitCost !== '' && rawRecord.unitCost != null) {
-    sheet.getRange(targetRow, costCol).setValue(rawRecord.unitCost);
-  }
+  var targetRange = sheet.getRange(targetRow, 1, 1, lastCol);
+  targetRange.clearDataValidations();
+  targetRange.setValues([rowValues]);
 
   if (poCol && rawRecord.poNumber) {
     var poUrl = poPdfMap[normalizePoKey_(rawRecord.poNumber)] || '';
@@ -504,12 +479,26 @@ function appendRawRecordToTracker_(sheet, trackerInfo, rawRecord, poPdfMap) {
     setPoNumberRichLink_(sheet.getRange(targetRow, poCol), rawRecord.poNumber, poUrl);
   }
 
-  return {
-    success: true,
-    poPdfFound: poPdfFound
-  };
+  if (sourceCol) sheet.getRange(targetRow, sourceCol).setNote('This line came from a PO but did not match an existing quoted tracker line.');
+
+  trackerInfo.rows.push({
+    sheetRow: targetRow,
+    type: String(rawRecord.itemType || 'PO Import Item'),
+    partNumber: String(rawRecord.itemName || ''),
+    description: String(rawRecord.description || ''),
+    status: 'Ordered',
+    quantity: rawRecord.qty
+  });
+
+  return { success: true, poPdfFound: poPdfFound, row: targetRow };
 }
 
+
+function setRowValueByCol_(rowValues, colNum, value) {
+  if (!colNum) return;
+  if (value === '' || value == null) return;
+  rowValues[colNum - 1] = value;
+}
 
 function buildTrackerDescriptionFromRaw_(rawRecord) {
   var parts = [];
@@ -640,6 +629,7 @@ function writeUnmatchedLog_(ss, unmatched) {
     'normalized_project',
     'po_number',
     'item_name',
+    'item_type',
     'description',
     'qty',
     'unit_cost',
@@ -662,6 +652,7 @@ function makeUnmatchedRow_(rawRecord, reason) {
     normalizeProjectName_(rawRecord.projectRaw),
     rawRecord.poNumber,
     rawRecord.itemName,
+    rawRecord.itemType,
     rawRecord.description,
     rawRecord.qty,
     rawRecord.unitCost,
@@ -829,24 +820,60 @@ function clearCellValidationIfNeeded_(sheet, row, col) {
   sheet.getRange(row, col).clearDataValidations();
 }
 
-function trackerAlreadyHasPo_(sheet, trackerInfo, poNumber) {
-  if (!poNumber) return false;
-
-  var poCol = getColNum_(trackerInfo.headerMap, PO_IMPORT_CONFIG.TRACKER_HEADERS.poNumber);
+function trackerAlreadyHasPoLine_(sheet, trackerInfo, rawRecord) {
+  if (!rawRecord || !rawRecord.poNumber) return false;
+  var headerMap = trackerInfo.headerMap;
+  var poCol = getColNum_(headerMap, PO_IMPORT_CONFIG.TRACKER_HEADERS.poNumber);
   if (!poCol) return false;
-
-  var targetKey = normalizePoKey_(poNumber);
+  var partCol = getColNum_(headerMap, PO_IMPORT_CONFIG.TRACKER_HEADERS.partNumber);
+  var descCol = getColNum_(headerMap, PO_IMPORT_CONFIG.TRACKER_HEADERS.description);
+  var qtyCol = getColNum_(headerMap, PO_IMPORT_CONFIG.TRACKER_HEADERS.quantity);
+  var costCol = getColNum_(headerMap, PO_IMPORT_CONFIG.TRACKER_HEADERS.costPerUnit);
+  var targetPo = normalizePoKey_(rawRecord.poNumber);
+  var targetPart = normalizePartNumber_(rawRecord.itemName);
+  var targetDesc = normalizeToken_(rawRecord.description);
+  var targetQty = normalizeComparableNumber_(rawRecord.qty);
+  var targetCost = normalizeComparableNumber_(rawRecord.unitCost);
   var data = sheet.getDataRange().getDisplayValues();
-
   for (var r = trackerInfo.headerRowIndex + 1; r < data.length; r++) {
-    var existingPo = data[r][poCol - 1];
-    if (normalizePoKey_(existingPo) === targetKey) {
-      return {
-        found: true,
-        row: r + 1
-      };
-    }
+    var row = data[r];
+    if (normalizePoKey_(row[poCol - 1]) !== targetPo) continue;
+    var existingPart = partCol ? normalizePartNumber_(row[partCol - 1]) : '';
+    var existingDesc = descCol ? normalizeToken_(row[descCol - 1]) : '';
+    var existingQty = qtyCol ? normalizeComparableNumber_(row[qtyCol - 1]) : '';
+    var existingCost = costCol ? normalizeComparableNumber_(row[costCol - 1]) : '';
+    var partMatches = targetPart && existingPart && targetPart === existingPart;
+    var descMatches = targetDesc && existingDesc && (existingDesc === targetDesc || existingDesc.indexOf(targetDesc) !== -1);
+    var qtyMatches = targetQty === '' || existingQty === '' || targetQty === existingQty;
+    var costMatches = targetCost === '' || existingCost === '' || targetCost === existingCost;
+    if ((partMatches || descMatches) && qtyMatches && costMatches) return {found:true,row:r+1};
   }
-
   return false;
+}
+
+
+function normalizeComparableNumber_(value) {
+  if (value === '' || value == null) return '';
+  var normalized = String(value).replace(/[$,\s]/g, '').trim();
+  if (!normalized) return '';
+  var numberValue = Number(normalized);
+  return isNaN(numberValue) ? normalized : String(Math.round(numberValue * 10000) / 10000);
+}
+
+function installDailyPoImportTrigger() {
+  removeDailyPoImportTriggers_();
+  ScriptApp.newTrigger('applyRawPoImportToProjectTrackers').timeBased().everyDays(1).atHour(6).create();
+  SpreadsheetApp.getUi().alert('Daily PO Import trigger installed. It will run once per day around 6:00 AM.');
+}
+
+function removeDailyPoImportTriggers_() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'applyRawPoImportToProjectTrackers') ScriptApp.deleteTrigger(triggers[i]);
+  }
+}
+
+function removeDailyPoImportTrigger() {
+  removeDailyPoImportTriggers_();
+  SpreadsheetApp.getUi().alert('Daily PO Import trigger removed.');
 }
