@@ -1,5 +1,5 @@
 /** Adds a custom menu on open */
-function onOpen() {
+function pumaAddNavigationMenu_() {
   SpreadsheetApp.getUi()
     .createMenu('Navigate')
     .addItem('Open Sidebar', 'openSidebar')
