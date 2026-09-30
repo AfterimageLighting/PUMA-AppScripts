@@ -72,15 +72,20 @@ function pumaFindNewOpenProjectFolders() {
 // ========================================
 
 function extractProjectNameFromFolder_(folderName) {
-  const name = String(folderName || "").trim();
+  let name = String(folderName || "").trim();
   if (!name) return name;
 
-  const firstDash = name.indexOf("-");
-  if (firstDash === -1) return name;
+  // Preserve legitimate hyphenated project names (e.g. Bryson-Kleine).
+  // Only remove known workflow/client suffixes.
+  name = name
+    .replace(/\s*-\s*owner\s*$/i, "")
+    .replace(/\s*-\s*night\s+design\s*$/i, "")
+    .replace(/\s*-\s*yoakum\s*$/i, "")
+    .replace(/\s*\(\s*dock\s+pickup\s*\)\s*$/i, "")
+    .replace(/\s*\(\s*housing\s+sample\s*\)\s*$/i, "")
+    .trim();
 
-  // everything before the first dash is the project name
-  const left = name.substring(0, firstDash).trim();
-  return left || name;
+  return name;
 }
 
 
@@ -117,9 +122,15 @@ function buildTrackerNameSet_(sheet, headerText) {
 // ========================================
 
 function normalizeKey_(s) {
+  // Use the same conservative identity rules as the central PUMA resolver.
+  if (typeof pumaNormalizeProjectKey_ === "function") {
+    return pumaNormalizeProjectKey_(s);
+  }
+
   return String(s || "")
     .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
+    .replace(/\b(residence|project)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
