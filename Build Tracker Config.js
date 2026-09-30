@@ -240,38 +240,3 @@ function listSheetsInFolder_(folderId) {
   results.sort((a, b) => a.name.localeCompare(b.name));
   return results;
 }
-
-/**
- * Returns [{id, name}, ...] for Google Sheets directly in a folder.
- * Shared Drive compatible.
- */
-function listSheetsInFolder_(folderId) {
-  const results = [];
-  let pageToken;
-
-  const q = [
-    `'${folderId}' in parents`,
-    `mimeType='application/vnd.google-apps.spreadsheet'`,
-    `trashed=false`
-  ].join(" and ");
-
-  do {
-    const resp = Drive.Files.list({
-      q,
-      fields: "nextPageToken, files(id, name)",
-      pageToken: pageToken,
-      pageSize: 1000,
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true
-    });
-
-    const files = resp.files || [];
-    files.forEach(f => results.push({ id: f.id, name: f.name }));
-
-    pageToken = resp.nextPageToken;
-  } while (pageToken);
-
-  results.sort((a, b) => a.name.localeCompare(b.name));
-  return results;
-}
-
