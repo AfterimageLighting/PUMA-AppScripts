@@ -36,10 +36,30 @@ var PO_IMPORT_CONFIG = {
 
   TRACKER_OPTIONAL_HEADERS: ['Project', 'Source', 'Description', 'Manufacturer'],
 
-  LOCKED_STATUSES: {
-    'Received': true,
-    'Delivered': true
+  // The PO importer owns the transition INTO Ordered. It must never move a
+  // later/special workflow state backward to Ordered.
+  ORDERABLE_STATUSES: {
+    '': true,
+    'Unapproved': true,
+    'Approved': true,
+    'To Be Ordered': true,
+    'Ordered': true
   },
+
+  NON_PRODUCT_KEYWORDS: [
+    'freight',
+    'shipping',
+    'delivery',
+    'tax',
+    'handling',
+    'labor',
+    'service charge',
+    'discount'
+  ],
+
+  PUMA_LINE_ID_HEADER: 'PUMA_LINE_ID',
+  PUMA_REVIEW_FLAG_HEADER: 'PUMA_REVIEW_FLAG',
+  PUMA_SOURCE_TYPE_HEADER: 'PUMA_SOURCE_TYPE',
 
   RAW_PROCESSED_COLUMN: 17, // Q
   RAW_ACTION_COLUMN: 18,    // R
@@ -72,6 +92,11 @@ function applyRawPoImportToProjectTrackers() {
   var usedRowsBySheet = {};
   var unmatched = [];
 
+  // Central project resolver + independent tracker evidence. These are built
+  // once per run so every PO line uses the same authoritative project registry.
+  var projectRegistry = pumaBuildProjectRegistry_(ss);
+  var trackerEvidenceIndex = pumaBuildTrackerEvidenceIndex_(ss, projectRegistry);
+
   var matchedCount = 0;
   var appendedCount = 0;
   var skippedStampedCount = 0;
@@ -98,15 +123,6 @@ function applyRawPoImportToProjectTrackers() {
       vendor: String(getCellByHeader_(row, rawHeaderMap, PO_IMPORT_CONFIG.RAW_HEADERS.vendor) || '').trim()
     };
 
-    var normalizedProject = normalizeProjectName_(rawRecord.projectRaw);
-
-    if (!normalizedProject) {
-      var reason = 'Could not normalize project name';
-      unmatched.push(makeUnmatchedRow_(rawRecord, reason));
-      stampProcessedRawRow_(rawSheet, rawRecord.sheetRow, 'Unmatched - ' + reason);
-      continue;
-    }
-
     var trackerOverride = String(
       rawSheet.getRange(
         rawRecord.sheetRow,
@@ -114,14 +130,49 @@ function applyRawPoImportToProjectTrackers() {
       ).getDisplayValue() || ''
     ).trim();
 
-    var trackerSheetName = trackerOverride || (normalizedProject + PO_IMPORT_CONFIG.TRACKER_SUFFIX);
+    rawRecord.rawTrackerOverride = trackerOverride;
+
+    // Ignore charges that are not physical tracker items. Keep them in RAW for
+    // audit/history, but never allow them to match a fixture row.
+    if (isNonProductPoLine_(rawRecord)) {
+      stampProcessedRawRow_(rawSheet, rawRecord.sheetRow, 'Ignored - Non-product charge');
+      continue;
+    }
+
+    // Manual override is evaluated FIRST, even when project_raw is blank.
+    var projectEvidence = pumaGatherRawPoEvidence_(
+      rawRecord,
+      projectRegistry,
+      trackerEvidenceIndex
+    );
+
+    var projectResolution = pumaResolveProjectWithRegistry_(
+      projectRegistry,
+      rawRecord.projectRaw,
+      projectEvidence
+    );
+
+    if (projectResolution.status !== 'CONFIRMED') {
+      var resolutionReason =
+        'Project resolution ' + projectResolution.status +
+        (projectResolution.method ? ' (' + projectResolution.method + ')' : '');
+
+      unmatched.push(makeUnmatchedRow_(rawRecord, resolutionReason));
+      stampProcessedRawRow_(rawSheet, rawRecord.sheetRow, 'Unmatched - ' + resolutionReason);
+      continue;
+    }
+
+    rawRecord.resolvedProject = projectResolution.canonicalProject;
+    rawRecord.resolvedTrackerSheetName = projectResolution.trackerSheetName;
+
+    var trackerSheetName = projectResolution.trackerSheetName;
     var trackerSheet = ss.getSheetByName(trackerSheetName);
 
     if (!trackerSheet) {
-     var reason = 'Tracker sheet not found: ' + trackerSheetName;
-     unmatched.push(makeUnmatchedRow_(rawRecord, reason));
-     stampProcessedRawRow_(rawSheet, rawRecord.sheetRow, 'Unmatched - ' + reason);
-     continue;
+      var reason = 'Resolved tracker sheet not found: ' + trackerSheetName;
+      unmatched.push(makeUnmatchedRow_(rawRecord, reason));
+      stampProcessedRawRow_(rawSheet, rawRecord.sheetRow, 'Unmatched - ' + reason);
+      continue;
     }
 
     if (!usedRowsBySheet[trackerSheetName]) {
@@ -152,6 +203,13 @@ function applyRawPoImportToProjectTrackers() {
     }
 
     var match = findBestTrackerMatch_(trackerInfo, rawRecord, usedRowsBySheet[trackerSheetName]);
+
+    if (match && match.ambiguous) {
+      var ambiguousReason = 'Ambiguous tracker item match: ' + match.candidateRows.join(', ');
+      unmatched.push(makeUnmatchedRow_(rawRecord, ambiguousReason));
+      stampProcessedRawRow_(rawSheet, rawRecord.sheetRow, 'Unmatched - ' + ambiguousReason);
+      continue;
+    }
 
     if (match) {
       try {
@@ -208,6 +266,8 @@ function applyRawPoImportToProjectTrackers() {
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('PUMA')
+    .addItem('Audit RAW PO Project Resolution (Read Only)', 'pumaAuditRawPoProjectResolution')
+    .addSeparator()
     .addItem('Apply RAW PO Import', 'applyRawPoImportToProjectTrackers')
     .addToUi();
 }
@@ -299,69 +359,111 @@ function findTrackerHeaderRowIndex_(data) {
 
 
 /**
- * Match priority:
- * 100 = Type exact match to RAW description
- *  90 = exact part number
- *  80 = wildcard/family part match
- *  70 = tracker description exact
+ * Deterministic tracker-item matching.
+ *
+ * Strongest:
+ *   exact Type + exact Part Number
+ *   exact Part Number
+ *   exact Type + family Part Number
+ *   family Part Number
+ *   exact Type + exact Description
+ *   exact Type
+ *   exact Description
+ *
+ * Quantity is a tie-breaker only. If multiple rows remain tied for the best
+ * score, this function returns ambiguous instead of guessing.
  */
 function findBestTrackerMatch_(trackerInfo, rawRecord, usedRowsMap) {
   if (!trackerInfo || !trackerInfo.rows || !trackerInfo.rows.length) {
     return null;
   }
 
-  var best = null;
   usedRowsMap = usedRowsMap || {};
+  var candidates = [];
+
+  var rawType = normalizeToken_(rawRecord.itemType);
+  var rawPart = normalizePartNumber_(rawRecord.itemName);
+  var rawDesc = normalizeToken_(rawRecord.description);
+  var rawQty = normalizeComparableNumber_(rawRecord.qty);
 
   for (var i = 0; i < trackerInfo.rows.length; i++) {
     var tr = trackerInfo.rows[i];
     if (usedRowsMap[tr.sheetRow]) continue;
 
-    var score = 0;
-
     var trackerType = normalizeToken_(tr.type);
-    var rawDesc = normalizeToken_(rawRecord.description);
-
     var trackerPart = normalizePartNumber_(tr.partNumber);
-    var rawPart = normalizePartNumber_(rawRecord.itemName);
-
     var trackerDesc = normalizeToken_(tr.description);
+    var trackerQty = normalizeComparableNumber_(tr.quantity);
 
-    if (trackerType && rawDesc && trackerType === rawDesc) {
-      score = Math.max(score, 100);
+    var exactType = !!(trackerType && rawType && trackerType === rawType);
+    var exactPart = !!(trackerPart && rawPart && trackerPart === rawPart);
+    var familyPart = !!(
+      trackerPart && rawPart &&
+      !exactPart &&
+      partNumbersAreFamilyMatch_(tr.partNumber, rawRecord.itemName)
+    );
+    var exactDesc = !!(trackerDesc && rawDesc && trackerDesc === rawDesc);
+
+    var score = 0;
+    var method = '';
+
+    if (exactType && exactPart) {
+      score = 130;
+      method = 'TYPE+PART';
+    } else if (exactPart) {
+      score = 110;
+      method = 'PART';
+    } else if (exactType && familyPart) {
+      score = 100;
+      method = 'TYPE+PART_FAMILY';
+    } else if (familyPart) {
+      score = 90;
+      method = 'PART_FAMILY';
+    } else if (exactType && exactDesc) {
+      score = 80;
+      method = 'TYPE+DESCRIPTION';
+    } else if (exactType) {
+      score = 75;
+      method = 'TYPE';
+    } else if (exactDesc) {
+      score = 60;
+      method = 'DESCRIPTION';
     }
 
-    if (trackerPart && rawPart && trackerPart === rawPart) {
-      score = Math.max(score, 90);
-    }
+    if (!score) continue;
 
-    if (trackerPart && rawPart && partNumbersAreFamilyMatch_(tr.partNumber, rawRecord.itemName)) {
-      score = Math.max(score, 80);
-    }
+    // Quantity only breaks an otherwise equivalent match. Partial ordering is
+    // common, so quantity mismatch must not invalidate a strong Type/Part match.
+    if (rawQty !== '' && trackerQty !== '' && rawQty === trackerQty) score += 2;
 
-    if (trackerDesc && rawDesc && trackerDesc === rawDesc) {
-      score = Math.max(score, 70);
-    }
-
-    if (score > 0) {
-      var trackerQty = Number(tr.quantity || 0);
-      var rawQty = Number(rawRecord.qty || 0);
-      if (trackerQty && rawQty && trackerQty === rawQty) {
-        score += 1;
-      }
-    }
-
-    if (score > 0 && (!best || score > best.score)) {
-      best = {
-        trackerRow: tr,
-        score: score
-      };
-    }
+    candidates.push({
+      trackerRow: tr,
+      score: score,
+      method: method
+    });
   }
 
-  return best;
-}
+  if (!candidates.length) return null;
 
+  candidates.sort(function(a, b) {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.trackerRow.sheetRow - b.trackerRow.sheetRow;
+  });
+
+  var bestScore = candidates[0].score;
+  var tied = candidates.filter(function(x) { return x.score === bestScore; });
+
+  if (tied.length > 1) {
+    return {
+      ambiguous: true,
+      score: bestScore,
+      candidateRows: tied.map(function(x) { return x.trackerRow.sheetRow; }),
+      candidates: tied
+    };
+  }
+
+  return candidates[0];
+}
 
 /**
  * Update an existing tracker row
@@ -406,7 +508,10 @@ function applyMatchToTrackerRow_(sheet, trackerInfo, match, rawRecord, poPdfMap)
 
   if (statusCol) {
     var currentStatus = String(sheet.getRange(rowNum, statusCol).getDisplayValue() || '').trim();
-    if (!PO_IMPORT_CONFIG.LOCKED_STATUSES[currentStatus]) {
+
+    // PO import may advance early purchasing states to Ordered, but may never
+    // regress Received/Scheduled/Delivered/Omitted/Note or any unknown state.
+    if (canPoImporterSetOrdered_(currentStatus) && currentStatus !== 'Ordered') {
       try {
         sheet.getRange(rowNum, statusCol).setValue('Ordered');
       } catch (e) {
@@ -444,6 +549,9 @@ function appendRawRecordToTracker_(sheet, trackerInfo, rawRecord, poPdfMap) {
   var statusCol = getColNum_(headerMap, PO_IMPORT_CONFIG.TRACKER_HEADERS.status);
   var poCol = getColNum_(headerMap, PO_IMPORT_CONFIG.TRACKER_HEADERS.poNumber);
   var costCol = getColNum_(headerMap, PO_IMPORT_CONFIG.TRACKER_HEADERS.costPerUnit);
+  var lineIdCol = getColNum_(headerMap, PO_IMPORT_CONFIG.PUMA_LINE_ID_HEADER);
+  var reviewFlagCol = getColNum_(headerMap, PO_IMPORT_CONFIG.PUMA_REVIEW_FLAG_HEADER);
+  var sourceTypeCol = getColNum_(headerMap, PO_IMPORT_CONFIG.PUMA_SOURCE_TYPE_HEADER);
 
   var insertAfterRow = findLastRealTrackerDataRow_(sheet, trackerInfo);
   sheet.insertRowAfter(insertAfterRow);
@@ -459,7 +567,11 @@ function appendRawRecordToTracker_(sheet, trackerInfo, rawRecord, poPdfMap) {
   }
 
   var rowValues = new Array(lastCol).fill('');
-  setRowValueByCol_(rowValues, projectCol, normalizeProjectName_(rawRecord.projectRaw));
+  setRowValueByCol_(
+    rowValues,
+    projectCol,
+    rawRecord.resolvedProject || normalizeProjectName_(rawRecord.projectRaw)
+  );
   setRowValueByCol_(rowValues, sourceCol, 'PO Import - Unmatched');
   setRowValueByCol_(rowValues, typeCol, rawRecord.itemType || 'PO Import Item');
   setRowValueByCol_(rowValues, partCol, rawRecord.itemName);
@@ -468,6 +580,9 @@ function appendRawRecordToTracker_(sheet, trackerInfo, rawRecord, poPdfMap) {
   setRowValueByCol_(rowValues, qtyCol, rawRecord.qty);
   setRowValueByCol_(rowValues, statusCol, 'Ordered');
   setRowValueByCol_(rowValues, costCol, rawRecord.unitCost);
+  setRowValueByCol_(rowValues, lineIdCol, generatePumaLineId_());
+  setRowValueByCol_(rowValues, reviewFlagCol, '');
+  setRowValueByCol_(rowValues, sourceTypeCol, 'PO_ONLY');
 
   var targetRange = sheet.getRange(targetRow, 1, 1, lastCol);
   targetRange.clearDataValidations();
@@ -491,6 +606,38 @@ function appendRawRecordToTracker_(sheet, trackerInfo, rawRecord, poPdfMap) {
   });
 
   return { success: true, poPdfFound: poPdfFound, row: targetRow };
+}
+
+
+function canPoImporterSetOrdered_(status) {
+  status = String(status || '').trim();
+  return !!PO_IMPORT_CONFIG.ORDERABLE_STATUSES[status];
+}
+
+
+function isNonProductPoLine_(rawRecord) {
+  var haystack = [
+    rawRecord && rawRecord.itemName,
+    rawRecord && rawRecord.itemType,
+    rawRecord && rawRecord.description
+  ].map(function(v) {
+    return String(v || '').toLowerCase();
+  }).join(' ');
+
+  if (!haystack.trim()) return false;
+
+  for (var i = 0; i < PO_IMPORT_CONFIG.NON_PRODUCT_KEYWORDS.length; i++) {
+    var term = PO_IMPORT_CONFIG.NON_PRODUCT_KEYWORDS[i];
+    if (haystack.indexOf(term) !== -1) return true;
+  }
+
+  return false;
+}
+
+
+function generatePumaLineId_() {
+  // Stable-enough unique ID for a newly appended PO-only tracker row.
+  return 'PUMA-LINE-' + Utilities.getUuid().replace(/-/g, '').substring(0, 8);
 }
 
 
