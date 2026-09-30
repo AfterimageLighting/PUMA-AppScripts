@@ -62,4 +62,9 @@ function onOpen(e) {
     .addSubMenu(esdMenu)
     .addSubMenu(poMenu)
     .addToUi();
+
+  // Separate navigation menu, dispatched from the single project onOpen.
+  if (typeof pumaAddNavigationMenu_ === 'function') {
+    pumaAddNavigationMenu_();
+  }
 }
