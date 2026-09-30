@@ -117,7 +117,7 @@ function softMatchRows_(existingRows, incomingRows) {
         confidence: 'HIGH',
         incoming,
         existing: availableExact,
-        pumaLineId: availableExact.pumaLineId || generatePumaLineId_(),
+        pumaLineId: availableExact.pumaLineId || generateSoftMatchPumaLineId_(),
         reviewFlag: '',
         reason: 'Type, manufacturer, part number, and quantity match exactly.'
       });
@@ -139,7 +139,7 @@ function softMatchRows_(existingRows, incomingRows) {
         confidence: 'MEDIUM',
         incoming,
         existing: soft,
-        pumaLineId: soft.pumaLineId || generatePumaLineId_(),
+        pumaLineId: soft.pumaLineId || generateSoftMatchPumaLineId_(),
         reviewFlag: buildReviewFlag_(soft, incoming),
         reason: 'Type matched uniquely, but manufacturer, part number, or quantity changed.'
       });
@@ -154,7 +154,7 @@ function softMatchRows_(existingRows, incomingRows) {
         confidence: 'LOW',
         incoming,
         existing: null,
-        pumaLineId: generatePumaLineId_(),
+        pumaLineId: generateSoftMatchPumaLineId_(),
         reviewFlag: 'Multiple existing rows share this Type. Manual review required.',
         reason: 'Type is not unique in the existing tracker.'
       });
@@ -168,7 +168,7 @@ function softMatchRows_(existingRows, incomingRows) {
       confidence: 'HIGH',
       incoming,
       existing: null,
-      pumaLineId: generatePumaLineId_(),
+      pumaLineId: generateSoftMatchPumaLineId_(),
       reviewFlag: '',
       reason: 'No exact or type match found.'
     });
@@ -183,7 +183,7 @@ function softMatchRows_(existingRows, incomingRows) {
       confidence: 'HIGH',
       incoming: null,
       existing,
-      pumaLineId: existing.pumaLineId || generatePumaLineId_(),
+      pumaLineId: existing.pumaLineId || generateSoftMatchPumaLineId_(),
       reviewFlag: 'Existing tracker row not found in latest quote import.',
       reason: 'Existing row has no incoming exact or soft match.'
     });
@@ -244,10 +244,10 @@ function buildSoftMatchColumnMap_(headers) {
 }
 
 function findHeaderByAliases_(headers, aliases) {
-  const normalizedHeaders = headers.map(h => normalizeHeader_(h));
+  const normalizedHeaders = headers.map(h => normalizeSoftMatchHeader_(h));
 
   for (let i = 0; i < aliases.length; i++) {
-    const target = normalizeHeader_(aliases[i]);
+    const target = normalizeSoftMatchHeader_(aliases[i]);
     const idx = normalizedHeaders.indexOf(target);
     if (idx !== -1) return idx;
   }
@@ -255,7 +255,7 @@ function findHeaderByAliases_(headers, aliases) {
   return -1;
 }
 
-function normalizeHeader_(value) {
+function normalizeSoftMatchHeader_(value) {
   return String(value || '')
     .toLowerCase()
     .replace(/[^\w]+/g, '')
@@ -333,7 +333,7 @@ function buildReviewFlag_(existing, incoming) {
   return changes.join(' | ');
 }
 
-function generatePumaLineId_() {
+function generateSoftMatchPumaLineId_() {
   return 'PUMA-LINE-' + Utilities.getUuid().slice(0, 8);
 }
 
@@ -608,18 +608,18 @@ function readRowsFromQuoteSpreadsheet_(spreadsheetId, quoteName) {
  */
 function findQuoteHeaderRow_(values) {
   for (let r = 0; r < Math.min(values.length, 25); r++) {
-    const headers = values[r].map(h => normalizeHeader_(h));
+    const headers = values[r].map(h => normalizeSoftMatchHeader_(h));
 
-    const hasPart = headers.indexOf(normalizeHeader_('Part Number')) !== -1 ||
-                    headers.indexOf(normalizeHeader_('Part #')) !== -1 ||
-                    headers.indexOf(normalizeHeader_('Part')) !== -1;
+    const hasPart = headers.indexOf(normalizeSoftMatchHeader_('Part Number')) !== -1 ||
+                    headers.indexOf(normalizeSoftMatchHeader_('Part #')) !== -1 ||
+                    headers.indexOf(normalizeSoftMatchHeader_('Part')) !== -1;
 
-    const hasQty = headers.indexOf(normalizeHeader_('Quantity')) !== -1 ||
-                   headers.indexOf(normalizeHeader_('Qty')) !== -1;
+    const hasQty = headers.indexOf(normalizeSoftMatchHeader_('Quantity')) !== -1 ||
+                   headers.indexOf(normalizeSoftMatchHeader_('Qty')) !== -1;
 
-    const hasMfg = headers.indexOf(normalizeHeader_('Manufacturer')) !== -1 ||
-                   headers.indexOf(normalizeHeader_('MFG')) !== -1 ||
-                   headers.indexOf(normalizeHeader_('Vendor')) !== -1;
+    const hasMfg = headers.indexOf(normalizeSoftMatchHeader_('Manufacturer')) !== -1 ||
+                   headers.indexOf(normalizeSoftMatchHeader_('MFG')) !== -1 ||
+                   headers.indexOf(normalizeSoftMatchHeader_('Vendor')) !== -1;
 
     if (hasPart && hasQty && hasMfg) {
       return { rowIndex: r };
@@ -684,7 +684,7 @@ function controlledWriteSoftMatchActiveTrackerVsLiveQuotes() {
 
     const rowNum = existing.sourceRow;
 
-    tracker.getRange(rowNum, writeCols.pumaLineId).setValue(result.pumaLineId || existing.pumaLineId || generatePumaLineId_());
+    tracker.getRange(rowNum, writeCols.pumaLineId).setValue(result.pumaLineId || existing.pumaLineId || generateSoftMatchPumaLineId_());
 
     tracker.getRange(rowNum, writeCols.reviewFlag).setValue(result.reviewFlag || '');
 
