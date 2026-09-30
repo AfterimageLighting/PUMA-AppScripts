@@ -46,6 +46,9 @@ function onOpen(e) {
    * Purchase Orders
    * ========================= */
   const poMenu = ui.createMenu('Purchase Orders')
+    .addItem('Audit RAW PO Project Resolution (Read Only)', 'pumaAuditRawPoProjectResolution')
+    .addItem('Apply RAW PO Import', 'applyRawPoImportToProjectTrackers')
+    .addSeparator()
     .addItem('Import POs (Only New PDFs)', 'importPOs_onlyNew')
     .addItem('Import POs (Scan Recent PDFs)', 'importPOs_scanAll')
     .addItem('Reprocess Selected Log Rows', 'importPOs_reprocessSelectedLogRows');
