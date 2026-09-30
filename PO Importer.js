@@ -263,16 +263,6 @@ function applyRawPoImportToProjectTrackers() {
 /**
  * Menu
  */
-function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('PUMA')
-    .addItem('Audit RAW PO Project Resolution (Read Only)', 'pumaAuditRawPoProjectResolution')
-    .addSeparator()
-    .addItem('Apply RAW PO Import', 'applyRawPoImportToProjectTrackers')
-    .addToUi();
-}
-
-
 /**
  * Load tracker sheet into memory
  */
