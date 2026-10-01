@@ -4,6 +4,12 @@ const QUOTE_START_ROW = 10;
 const QUOTE_BG_CHECK_COLUMN = 2; // use column B to detect grey area
 
 function syncAllConfiguredTrackers() {
+  // Backward-compatible safe alias. The historical implementation cleared
+  // broad tracker ranges and could overwrite PO/manual operational data.
+  return safeSyncALLConfiguredTrackers();
+}
+
+function legacySyncAllConfiguredTrackersUnsafe_() {
   var ss = SpreadsheetApp.getActive();
   var configSheet = getTrackerConfigSheet_(ss);
 
