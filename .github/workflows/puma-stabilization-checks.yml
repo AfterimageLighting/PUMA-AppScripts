@@ -45,6 +45,47 @@ jobs:
 
           print("Top-level function namespace is unique.")
           PY
+      - name: Check menu and trigger handler targets
+        shell: bash
+        run: |
+          python - <<'PY'
+          import glob, re, sys, json
+
+          functions=set()
+          menu_targets=[]
+          trigger_targets=[]
+
+          for path in glob.glob("*.js"):
+              text=open(path, encoding="utf-8").read()
+              functions.update(re.findall(r"^function\s+([A-Za-z0-9_$]+)\s*\(", text, re.M))
+              menu_targets += [(path, x) for x in re.findall(
+                  r"\.addItem\(\s*['\"][^'\"]+['\"]\s*,\s*['\"]([A-Za-z0-9_$]+)['\"]\s*\)",
+                  text
+              )]
+              trigger_targets += [(path, x) for x in re.findall(
+                  r"\.newTrigger\(\s*['\"]([A-Za-z0-9_$]+)['\"]\s*\)",
+                  text
+              )]
+
+          missing_menu=[(p,t) for p,t in menu_targets if t not in functions]
+          missing_triggers=[(p,t) for p,t in trigger_targets if t not in functions]
+          if missing_menu or missing_triggers:
+              print(json.dumps({
+                  "missing_menu_targets": missing_menu,
+                  "missing_trigger_targets": missing_triggers,
+              }, indent=2))
+              sys.exit(1)
+
+          print(f"Validated {len(menu_targets)} menu handlers and {len(trigger_targets)} trigger handlers.")
+          PY
+      - name: Check source for embedded Chat webhook credentials
+        shell: bash
+        run: |
+          if grep -R --include='*.js' -n "chat.googleapis.com/v1/spaces/" .; then
+            echo "Embedded Google Chat webhook URL found in Apps Script source."
+            exit 1
+          fi
+          echo "No embedded Google Chat webhook URLs found."
       - name: Prevent accidental production CLASP target
         shell: bash
         run: |
