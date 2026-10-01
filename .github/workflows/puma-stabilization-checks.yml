@@ -101,3 +101,61 @@ jobs:
               raise SystemExit(f"Stabilization branch must point at the verified PUMA TEST Script ID, found: {script_id!r}")
           print("Verified PUMA TEST Script ID:", script_id)
           PY
+      - name: Check stabilization safety invariants
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          legacy = Path("syncALLConfiguredTrackers.js").read_text(encoding="utf-8")
+          toolbar = Path("PUMA Toolbar Extension.js").read_text(encoding="utf-8")
+          soft = Path("PUMA_SoftMatch.js").read_text(encoding="utf-8")
+          safe = Path("PUMA_SafeSync.js").read_text(encoding="utf-8")
+          po = Path("PO Importer.js").read_text(encoding="utf-8")
+
+          alias = re.search(
+              r"function\s+syncAllConfiguredTrackers\s*\(\)\s*\{(?P<body>.*?)\n\}",
+              legacy,
+              re.S,
+          )
+          if not alias or "safeSyncALLConfiguredTrackers()" not in alias.group("body"):
+              raise SystemExit("Legacy sync entry must redirect to Safe Sync.")
+
+          disabled = re.search(
+              r"function\s+legacySyncAllConfiguredTrackersUnsafe_\s*\(\)\s*\{(?P<body>.*?)\n\}",
+              legacy,
+              re.S,
+          )
+          if not disabled or "throw new Error" not in disabled.group("body"):
+              raise SystemExit("Legacy destructive sync entry is not disabled.")
+
+          if "Sync ALL Configured Quotes → Trackers" in toolbar:
+              raise SystemExit("Destructive legacy sync is still exposed in the PUMA menu.")
+
+          required_soft = [
+              "if (!enabled) continue;",
+              "Tracker config is missing Enable? column.",
+              "Configured quote first tab does not contain recognizable",
+              "sourceType !== 'PO_ONLY'",
+              "sourceType !== 'MANUAL'",
+          ]
+          for needle in required_soft:
+              if needle not in soft and needle not in safe:
+                  raise SystemExit(f"Missing Safe Sync guard: {needle}")
+
+          required_po = [
+              "TEST_PO_ROOT_FOLDER_ID: '1EeexxItqTX896tq64lf1-8lBz2bqCBmH'",
+              "LIVE_PO_ROOT_FOLDER_ID: '1VlCypDA_iF5dEUmA9c3E7ABYyS4-m6W2'",
+              "if (!rawPart) return null;",
+              "PO_ONLY - no unique exact quoted-row match",
+          ]
+          for needle in required_po:
+              if needle not in po:
+                  raise SystemExit(f"Missing PO importer guard: {needle}")
+
+          if "DriveApp.searchFiles" in po:
+              raise SystemExit("PO importer must not fall back to Drive-wide PDF search.")
+
+          print("Stabilization safety invariants validated.")
+          PY
