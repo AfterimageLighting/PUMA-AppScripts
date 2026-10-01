@@ -212,9 +212,15 @@ function getPriorTrackerConfigMap_(sheet) {
   const headers = values[0].map(v => String(v || '').trim().toLowerCase());
   const idx = name => headers.indexOf(String(name).toLowerCase());
 
-  const enableIdx = idx('enable?');
+  let enableIdx = idx('enable?');
   const projectIdx = idx('project');
   const trackerIdx = idx('tracker sheet name');
+
+  // Legacy PUMA has a blank A1 while column A still contains checkbox values.
+  // Treat column A as Enable? only when B/C prove this is the known config layout.
+  if (enableIdx === -1 && projectIdx === 1 && trackerIdx === 2) {
+    enableIdx = 0;
+  }
   const dateIdx = idx('date updated');
   const quoteNameIdx = idx('quote name');
   const quoteIdIdx = idx('quote sheet id');
