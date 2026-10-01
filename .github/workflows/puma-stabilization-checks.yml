@@ -94,10 +94,10 @@ jobs:
           obj=json.load(open(".clasp.json", encoding="utf-8"))
           live="1ddj6ChwgU9bnUpO-by2EtkWFuQ2ZIno4lRwfLJOqt7ce6XQi-0kbWmMs"
           script_id=obj.get("scriptId","")
+          test="1TBhtqb5-3L3z34ozM87-mlJmxNxkcWofyeScPnjlHkCRBIxKdXBpiDpp"
           if script_id == live:
-              raise SystemExit("Stabilization branch still points at LIVE Apps Script.")
-          if script_id != "REPLACE_WITH_PUMA_TEST_SCRIPT_ID":
-              print("Test Script ID is configured:", script_id)
-          else:
-              print("Test Script ID placeholder is still active (safe, not deployable).")
+              raise SystemExit("Stabilization branch points at LIVE Apps Script.")
+          if script_id != test:
+              raise SystemExit(f"Stabilization branch must point at the verified PUMA TEST Script ID, found: {script_id!r}")
+          print("Verified PUMA TEST Script ID:", script_id)
           PY
