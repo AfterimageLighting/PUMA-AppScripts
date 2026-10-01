@@ -55,6 +55,7 @@ function safeSyncALLConfiguredTrackers() {
   let success = 0;
   let skipped = 0;
   let failed = 0;
+  const processedTrackers = new Set();
 
   for (let r = 1; r < values.length; r++) {
     const enabled = isSafeSyncAllEnabled_(values[r][enableIdx]);
@@ -67,6 +68,13 @@ function safeSyncALLConfiguredTrackers() {
       logRows.push([trackerName, 'SKIPPED', 'Not enabled']);
       continue;
     }
+
+    if (processedTrackers.has(trackerName)) {
+      skipped++;
+      logRows.push([trackerName, 'SKIPPED', 'Already synced from another enabled config row']);
+      continue;
+    }
+    processedTrackers.add(trackerName);
 
     const tracker = ss.getSheetByName(trackerName);
 
