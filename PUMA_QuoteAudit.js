@@ -518,14 +518,42 @@ function classifyPumaQuotationFile_(file) {
         /cost per unit|unit price|total cost|margin|extended|sell price/i.test(v)
       );
 
+      // A blank quotation template has all of the headers but no real line
+      // items. Require at least one populated item row before it can be
+      // considered a live quotation.
+      let populatedItemRows = 0;
+      for (let r = 0; r < values.length; r++) {
+        const row = values[r].map(v => String(v || '').trim());
+        const numericQty = row.some(v => /^\d+(?:\.\d+)?$/.test(v) && Number(v) > 0);
+        const meaningfulText = row.some(v =>
+          v && !/^(qty|quantity|type|description|manufacturer|mfg|part number|part #|total|cost per unit|margin|profit)$/i.test(v)
+        );
+        const hasLikelyItemIdentity = row.some(v =>
+          /[A-Za-z].*\d|\d.*[A-Za-z]|[-\/]/.test(v)
+        );
+        if (numericQty && meaningfulText && hasLikelyItemIdentity) populatedItemRows++;
+      }
+
       const structuralHeaders = hasQty && hasDescription && hasManufacturer && hasPart;
-      if (hasQuotationTitle || structuralHeaders || (hasQty && hasPart && hasPricing)) {
+      const populatedQuote =
+        populatedItemRows > 0 &&
+        (hasQuotationTitle || structuralHeaders || (hasQty && hasPart && hasPricing));
+
+      if (populatedQuote) {
         return {
           isQuote: true,
           confidence: strongName ? 'HIGH' : 'STRUCTURAL',
           reason: strongName
-            ? 'Quote-like name and quotation structure detected.'
-            : 'Quotation structure detected despite non-standard file name.'
+            ? 'Quote-like name, quotation structure, and populated item rows detected.'
+            : 'Quotation structure and populated item rows detected despite non-standard file name.'
+        };
+      }
+
+      if ((hasQuotationTitle || structuralHeaders) && populatedItemRows === 0) {
+        return {
+          isQuote: false,
+          confidence: 'TEMPLATE',
+          reason: 'Quotation template/structure detected but no populated item rows.'
         };
       }
     }
@@ -708,13 +736,27 @@ function getCurrentOpenProjectFolderIds_() {
  * Helper: Check if expected Project Tracker and Tasks tabs exist for a project, to help prioritize which quote sync issues to review first.
  */
 function getPumaProjectSheetStatus_(ss, projectName) {
-  const trackerName = `${projectName} - Project Tracker`;
-  const tasksName = `${projectName} - Tasks`;
+  let trackerName = '';
+  let tasksName = '';
+
+  if (
+    typeof pumaBuildProjectRegistry_ === 'function' &&
+    typeof pumaResolveProjectWithRegistry_ === 'function'
+  ) {
+    const registry = pumaBuildProjectRegistry_(ss);
+    const resolution = pumaResolveProjectWithRegistry_(registry, projectName, {});
+    if (resolution.status === 'CONFIRMED') {
+      trackerName = resolution.trackerSheetName || '';
+      tasksName = trackerName
+        ? trackerName.replace(/ - Project Tracker$/i, ' - Tasks')
+        : '';
+    }
+  }
 
   return {
     trackerName,
-    trackerExists: !!ss.getSheetByName(trackerName),
-    tasksExists: !!ss.getSheetByName(tasksName)
+    trackerExists: !!(trackerName && ss.getSheetByName(trackerName)),
+    tasksExists: !!(tasksName && ss.getSheetByName(tasksName))
   };
 }
 
@@ -727,14 +769,4 @@ function formatPumaDateTime_(date) {
     Session.getScriptTimeZone(),
     'M/d/yyyy h:mm a'
   );
-}
-
-function testOpenProjectsParent() {
-  const folderId = '1S6m5hsxpkyt1GtcGWo1Bat-dXMCCsiIR'; // Willoughby Residence
-
-  const folder = Drive.Files.get(folderId, {
-    supportsAllDrives: true
-  });
-
-  Logger.log(JSON.stringify(folder, null, 2));
 }
