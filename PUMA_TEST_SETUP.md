@@ -25,19 +25,16 @@ The copied workbook also contains a visible `PUMA TEST CONTROL` tab.
 Google copies bound Apps Script code with a copied Google Sheet. The copied
 script is a separate Apps Script project.
 
-For safety, this branch's `.clasp.json` does NOT point at production. It is
-intentionally set to:
+The PUMA TEST bound Script ID has now been captured and this TEST branch's
+`.clasp.json` is configured to that copied project:
 
-`REPLACE_WITH_PUMA_TEST_SCRIPT_ID`
+`1TBhtqb5-3L3z34ozM87-mlJmxNxkcWofyeScPnjlHkCRBIxKdXBpiDpp`
 
-Before any CLASP push:
-1. Open the PUMA TEST spreadsheet.
-2. Extensions -> Apps Script.
-3. Project Settings.
-4. Copy the Script ID.
-5. Replace the placeholder in this branch only.
-6. Confirm the Script ID is NOT the live production ID:
-   `1ddj6ChwgU9bnUpO-by2EtkWFuQ2ZIno4lRwfLJOqt7ce6XQi-0kbWmMs`
+Production Script ID (must never be used on this stabilization branch):
+`1ddj6ChwgU9bnUpO-by2EtkWFuQ2ZIno4lRwfLJOqt7ce6XQi-0kbWmMs`
+
+The stabilization CI explicitly rejects the production Script ID. The exact
+commit containing the TEST Script ID passes both push and pull-request checks.
 
 ## Timezone
 
@@ -54,14 +51,37 @@ This branch removes duplicate global simple-trigger definitions:
 
 Individual ESD handlers now have unique function names.
 
+## Verified TEST integrations
+
+Gmail account:
+`adrian@afterimagelighting.com`
+
+Verified TEST labels:
+- PUMA TEST/OKD = Label_1
+- PUMA TEST/RFA = Label_2
+- PUMA TEST/RFA Processed = Label_8
+- PUMA TEST/RFPO = Label_3
+- PUMA TEST/PO = Label_4
+- PUMA TEST/RR = Label_5
+- PUMA TEST/RFPS = Label_6
+- PUMA TEST/DR = Label_7
+
+Verified TEST Drive destinations:
+- PO PDFs = `1EeexxItqTX896tq64lf1-8lBz2bqCBmH`
+- Receiving Reports = `1WMpQwDwGGVq8R1AYxvJPAP8gOrgmP9Bg`
+- Delivery Reports = `12hNy09LDDFAjyDl4q97GTTsCysyvSgJf`
+
+These are isolated TEST targets. Production targets remain unchanged.
+
 ## First test order
 
-1. Open PUMA TEST.
-2. Confirm the PUMA TEST CONTROL tab appears first.
-3. Push this branch to the copied Apps Script project only.
-4. Reload PUMA TEST.
-5. Run `PUMA -> Purchase Orders -> Audit RAW PO Project Resolution (Read Only)`.
-6. Do not run `Apply RAW PO Import` until the audit output has been reviewed.
-7. Validate Kinney, Harrison Smith, Maddux, Gough, Stony/Stoney Shore, blank
-   project overrides, repeated part numbers, freight, and ambiguous cases.
-8. Only after read-only results are clean, perform write tests inside PUMA TEST.
+1. Push this branch to the copied PUMA TEST Apps Script project only.
+2. Reload PUMA TEST and confirm the PUMA menu loads with no authorization/runtime errors.
+3. Run `PUMA -> Purchase Orders -> Audit RAW PO Project Resolution (Read Only)`.
+4. Run the Open Projects manifest audit, config read/SafeSync dry test, missing-quotes report, and the separated quote/general audit outputs.
+5. Validate Kinney, Harrison Smith, Maddux, Gough, Stony/Stoney Shore, blank
+   project overrides, repeated part numbers, freight, shared POs, and ambiguous cases.
+6. Do not run `Apply RAW PO Import` until all read-only results are reviewed.
+7. Only after read-only results are clean, perform write tests inside PUMA TEST.
+8. Configure/deploy an isolated Cloud TEST service with `PUMA_TEST_MODE=1` and the verified TEST labels/folders, then replay TEST-labeled messages.
+9. Do not merge or deploy production until Apps Script and Cloud end-to-end TEST results pass.
