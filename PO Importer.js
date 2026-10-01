@@ -710,15 +710,6 @@ function buildPoPdfMap_() {
 
   // Fail closed: unrestricted Drive-wide PDF search is intentionally disabled.
   throw new Error('PO PDF root folder is not configured.');
-  while (files.hasNext()) {
-    var file = files.next();
-    var key = extractPoNumberFromFileName_(file.getName());
-    if (key && !map[key]) {
-      map[key] = file.getUrl();
-    }
-  }
-
-  return map;
 }
 
 
