@@ -47,11 +47,12 @@ function onOpen(e) {
    * ========================= */
   const poMenu = ui.createMenu('Purchase Orders')
     .addItem('Audit RAW PO Project Resolution (Read Only)', 'pumaAuditRawPoProjectResolution')
+    .addItem('Audit Project Registry (Read Only)', 'pumaAuditProjectRegistryReadOnly')
+    .addSeparator()
     .addItem('Apply RAW PO Import', 'applyRawPoImportToProjectTrackers')
     .addSeparator()
-    .addItem('Import POs (Only New PDFs)', 'importPOs_onlyNew')
-    .addItem('Import POs (Scan Recent PDFs)', 'importPOs_scanAll')
-    .addItem('Reprocess Selected Log Rows', 'importPOs_reprocessSelectedLogRows');
+    .addItem('Install Daily PO Import Trigger', 'installDailyPoImportTrigger')
+    .addItem('Remove Daily PO Import Trigger', 'removeDailyPoImportTrigger');
 
   /* =========================
    * Assemble Menu
