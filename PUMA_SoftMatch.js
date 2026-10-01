@@ -470,12 +470,25 @@ function readLiveQuoteRowsForTracker_(ss, trackerSheetName) {
 
   const headers = values[0].map(h => String(h || '').trim());
 
+  let enableIdx = findHeaderByAliases_(headers, [
+    'Enable?',
+    'Enable',
+    'Enabled'
+  ]);
+
   const trackerIdx = findHeaderByAliases_(headers, [
     'Tracker Sheet Name',
     'trackerName',
     'Tracker Name',
     'Tracker'
   ]);
+
+  // Legacy live PUMA has a blank A1 while B/C still identify the known config
+  // layout. Treat column A as Enable? only in that exact layout.
+  const projectIdx = findHeaderByAliases_(headers, ['Project']);
+  if (enableIdx === -1 && projectIdx === 1 && trackerIdx === 2) {
+    enableIdx = 0;
+  }
 
   const quoteIdIdx = findHeaderByAliases_(headers, [
     'Quote Sheet ID',
@@ -489,6 +502,7 @@ function readLiveQuoteRowsForTracker_(ss, trackerSheetName) {
     'Quote'
   ]);
 
+  if (enableIdx === -1) throw new Error('Tracker config is missing Enable? column.');
   if (trackerIdx === -1) throw new Error('Tracker config is missing Tracker Sheet Name column.');
   if (quoteIdIdx === -1) throw new Error('Tracker config is missing Quote Sheet ID column.');
 
@@ -496,10 +510,13 @@ function readLiveQuoteRowsForTracker_(ss, trackerSheetName) {
   const trackerNorm = normalizeSoftMatchPart_(trackerSheetName);
 
   for (let r = 1; r < values.length; r++) {
+    const enabled = values[r][enableIdx] === true ||
+      String(values[r][enableIdx] || '').trim().toLowerCase() === 'true';
     const configTracker = String(values[r][trackerIdx] || '').trim();
     const quoteSheetId = String(values[r][quoteIdIdx] || '').trim();
     const quoteName = quoteNameIdx !== -1 ? String(values[r][quoteNameIdx] || '').trim() : '';
 
+    if (!enabled) continue;
     if (!configTracker || !quoteSheetId) continue;
     if (normalizeSoftMatchPart_(configTracker) !== trackerNorm) continue;
 
