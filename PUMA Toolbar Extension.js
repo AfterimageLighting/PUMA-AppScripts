@@ -19,8 +19,7 @@ function onOpen(e) {
     .addItem('Collapse All Projects', 'collapseDashboard')
     .addSeparator()
     .addItem('Refresh Dashboard', 'refreshDashboardProjectTrackers')
-    .addItem('Update Quote Closing Statuses', 'updateTrackerConfigQuoteStatuses')
-    .addItem('Update Pipeline', 'applyProbabilityFormattingToAllTrackers');
+    .addItem('Update Quote Closing Statuses', 'updateTrackerConfigQuoteStatuses');
 
   /* =========================
    * Tracker Configuration
