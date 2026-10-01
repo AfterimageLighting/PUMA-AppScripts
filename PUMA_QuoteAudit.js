@@ -29,7 +29,7 @@ const PUMA_QUOTE_AUDIT = {
   OPEN_PROJECTS_SHEET: 'Open Projects',
   TRACKER_CONFIG_SHEET: 'Tracker config',
   ACTIONS_SHEET: 'PUMA_AUDIT_ACTIONS',
-  OPEN_PROJECTS_PARENT_FOLDER_ID: '1acRZOrQUIzholav1Rw8d2GPosaDvNWx5',
+  OPEN_PROJECTS_PARENT_FOLDER_ID: '1acRZOrQUIzhoIav1Rw8d2GPosaDvNWx5',
 
   ACTION_CLASSIFICATION: 'QUOTE_SYNC',
   ACTION_ADD_MISSING: 'ADD MISSING QUOTE TO CONFIG',
@@ -429,89 +429,112 @@ function listPumaQuoteSheetsInFolder_(folderId) {
       includeItemsFromAllDrives: true
     });
 
-    const files = resp.files || [];
-
-    files.forEach(file => {
-     const name = String(file.name || '').toLowerCase();
-
-     const strongNameMatch =
-       name.includes('quote') ||
-       name.includes('quotation') ||
-       name.includes('adder') ||
-       name.includes('architectural') ||
-       name.includes('decorative') ||
-       name.includes('heater') ||
-       name.includes('lighting');
-
-     if (strongNameMatch) {
-       results.push({
-         id: file.id,
-         name: file.name
-       });
-       return;
-     }
-
-    // TEMP TEST MODE:
-    // Do not open unclear spreadsheets yet. Opening many spreadsheets is slow.
-    return;
+    (resp.files || []).forEach(file => {
+      const classification = classifyPumaQuotationFile_(file);
+      if (classification.isQuote) {
+        results.push({
+          id: file.id,
+          name: file.name,
+          confidence: classification.confidence,
+          reason: classification.reason
+        });
+      }
     });
 
     pageToken = resp.nextPageToken;
   } while (pageToken);
 
-  results.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  results.sort((a, b) => a.name.localeCompare(b.name));
   return results;
 }
 
+
 /**
- * Determines whether a Google Sheet file is probably a PUMA quotation.
+ * Determine whether a Google Sheet is a PUMA quotation.
  *
- * First pass: name-based filter.
- * Second pass: lightweight spreadsheet fingerprint check.
- *
- * If the name strongly suggests quote/adderr and the file cannot be opened,
- * we still include it so it appears for review instead of silently disappearing.
+ * Name alone is not authoritative. We inspect the workbook structure so
+ * non-standard but legitimate names (e.g. "Sayler Residence Deco") can pass,
+ * while obvious billing/inventory sheets do not get imported just because
+ * they contain the word "lighting".
  */
-function isLikelyPumaQuotation_(file) {
-  const name = String(file.name || '').toLowerCase();
+function classifyPumaQuotationFile_(file) {
+  const name = String(file && file.name || '').trim();
+  const lower = name.toLowerCase();
 
-  const nameLooksLikeQuote =
-    name.includes('quote') ||
-    name.includes('quotation') ||
-    name.includes('adder') ||
-    name.includes('architectural') ||
-    name.includes('decorative') ||
-    name.includes('heater');
+  const obviousNegative =
+    /\b(billing|invoice|inventory|packing slip|receiving|delivery report|tracker|tasks|dashboard|summary)\b/i.test(lower) ||
+    /^alig\b/i.test(lower);
 
-  if (!nameLooksLikeQuote) return false;
+  const strongName =
+    /\b(quote|quotation|adder|architectural|decorative|heater|landscape lighting|lighting quotation|downlighting|reconcilliation|reconciliation)\b/i.test(lower);
 
   try {
     const qss = SpreadsheetApp.openById(file.id);
-    const sheet = qss.getSheets()[0];
-    if (!sheet) return true;
+    const sheets = qss.getSheets();
+    if (!sheets.length) {
+      return {isQuote: false, confidence: 'NONE', reason: 'Spreadsheet has no tabs.'};
+    }
 
-    const f3 = String(sheet.getRange('F3').getDisplayValue() || '').toLowerCase();
+    // Inspect up to the first 5 tabs and first 15 rows. Quote workbooks vary
+    // between Master Quotation, Approved, and dated/working tabs.
+    for (let s = 0; s < Math.min(sheets.length, 5); s++) {
+      const sheet = sheets[s];
+      const lastCol = Math.max(1, Math.min(sheet.getLastColumn(), 16));
+      const lastRow = Math.max(1, Math.min(sheet.getLastRow(), 15));
+      const values = sheet.getRange(1, 1, lastRow, lastCol).getDisplayValues();
 
-    const row9 = sheet
-      .getRange(9, 1, 1, Math.min(12, sheet.getLastColumn()))
-      .getDisplayValues()[0]
-      .map(v => String(v || '').toLowerCase());
+      const flattened = values
+        .reduce((acc, row) => acc.concat(row), [])
+        .map(v => String(v || '').toLowerCase());
 
-    const joinedRow9 = row9.join(' | ');
+      const joined = flattened.join(' | ');
+      const hasQuotationTitle = joined.includes('quotation');
+      const hasQty = flattened.some(v => /^(qty|quantity|qnty)$/i.test(v.trim()));
+      const hasDescription = flattened.some(v => v.trim() === 'description');
+      const hasManufacturer = flattened.some(v => /^(manufacturer|mfg|vendor)$/i.test(v.trim()));
+      const hasPart = flattened.some(v => /^(part number|part #|part no\.?|product number)$/i.test(v.trim()));
+      const hasPricing = flattened.some(v =>
+        /cost per unit|unit price|total cost|margin|extended|sell price/i.test(v)
+      );
 
-    const hasQuotationTitle = f3.includes('quotation');
-    const hasQuoteHeaders =
-      joinedRow9.includes('qty') &&
-      joinedRow9.includes('description') &&
-      joinedRow9.includes('manufacturer') &&
-      joinedRow9.includes('part number');
+      const structuralHeaders = hasQty && hasDescription && hasManufacturer && hasPart;
+      if (hasQuotationTitle || structuralHeaders || (hasQty && hasPart && hasPricing)) {
+        return {
+          isQuote: true,
+          confidence: strongName ? 'HIGH' : 'STRUCTURAL',
+          reason: strongName
+            ? 'Quote-like name and quotation structure detected.'
+            : 'Quotation structure detected despite non-standard file name.'
+        };
+      }
+    }
 
-    return hasQuotationTitle || hasQuoteHeaders;
+    if (obviousNegative) {
+      return {isQuote: false, confidence: 'HIGH', reason: 'Non-quotation business sheet by name/structure.'};
+    }
+
+    return {
+      isQuote: false,
+      confidence: strongName ? 'REVIEW' : 'NONE',
+      reason: strongName
+        ? 'Name looks like a quote but quotation structure was not detected.'
+        : 'No quotation structure detected.'
+    };
+
   } catch (err) {
-    // If Drive found it and the name strongly looks like a quote,
-    // include it for audit review rather than hiding it.
-    return true;
+    // Failure to inspect is never enough for an automatic add. Strong names
+    // remain audit candidates, but are not treated as confirmed quotes.
+    return {
+      isQuote: false,
+      confidence: 'REVIEW',
+      reason: 'Could not inspect workbook: ' + err.message
+    };
   }
+}
+
+
+function isLikelyPumaQuotation_(file) {
+  return classifyPumaQuotationFile_(file).isQuote;
 }
 
 /**
