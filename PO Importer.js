@@ -374,8 +374,13 @@ function findBestTrackerMatch_(trackerInfo, rawRecord, usedRowsMap) {
 
   var rawType = normalizeToken_(rawRecord.itemType);
   var rawPart = normalizePartNumber_(rawRecord.itemName);
-  var rawDesc = normalizeToken_(rawRecord.description);
   var rawQty = normalizeComparableNumber_(rawRecord.qty);
+
+  // Automatic tracker-row writes require an exact part number. Type is the
+  // preferred disambiguator. Family/description/type-only similarity is not
+  // strong enough to mutate a quoted row; those lines fall through to a
+  // PO_ONLY append for review instead.
+  if (!rawPart) return null;
 
   for (var i = 0; i < trackerInfo.rows.length; i++) {
     var tr = trackerInfo.rows[i];
@@ -383,49 +388,20 @@ function findBestTrackerMatch_(trackerInfo, rawRecord, usedRowsMap) {
 
     var trackerType = normalizeToken_(tr.type);
     var trackerPart = normalizePartNumber_(tr.partNumber);
-    var trackerDesc = normalizeToken_(tr.description);
     var trackerQty = normalizeComparableNumber_(tr.quantity);
 
+    var exactPart = !!(trackerPart && trackerPart === rawPart);
+    if (!exactPart) continue;
+
     var exactType = !!(trackerType && rawType && trackerType === rawType);
-    var exactPart = !!(trackerPart && rawPart && trackerPart === rawPart);
-    var familyPart = !!(
-      trackerPart && rawPart &&
-      !exactPart &&
-      partNumbersAreFamilyMatch_(tr.partNumber, rawRecord.itemName)
-    );
-    var exactDesc = !!(trackerDesc && rawDesc && trackerDesc === rawDesc);
+    var score = exactType ? 130 : 110;
+    var method = exactType ? 'TYPE+PART' : 'PART';
 
-    var score = 0;
-    var method = '';
-
-    if (exactType && exactPart) {
-      score = 130;
-      method = 'TYPE+PART';
-    } else if (exactPart) {
-      score = 110;
-      method = 'PART';
-    } else if (exactType && familyPart) {
-      score = 100;
-      method = 'TYPE+PART_FAMILY';
-    } else if (familyPart) {
-      score = 90;
-      method = 'PART_FAMILY';
-    } else if (exactType && exactDesc) {
-      score = 80;
-      method = 'TYPE+DESCRIPTION';
-    } else if (exactType) {
-      score = 75;
-      method = 'TYPE';
-    } else if (exactDesc) {
-      score = 60;
-      method = 'DESCRIPTION';
+    // Quantity may reinforce an already exact Type+Part match. It must not
+    // break a tie between repeated exact parts that belong to different Types.
+    if (exactType && rawQty !== '' && trackerQty !== '' && rawQty === trackerQty) {
+      score += 2;
     }
-
-    if (!score) continue;
-
-    // Quantity only breaks an otherwise equivalent match. Partial ordering is
-    // common, so quantity mismatch must not invalidate a strong Type/Part match.
-    if (rawQty !== '' && trackerQty !== '' && rawQty === trackerQty) score += 2;
 
     candidates.push({
       trackerRow: tr,
@@ -455,10 +431,6 @@ function findBestTrackerMatch_(trackerInfo, rawRecord, usedRowsMap) {
 
   return candidates[0];
 }
-
-/**
- * Update an existing tracker row
- */
 function applyMatchToTrackerRow_(sheet, trackerInfo, match, rawRecord, poPdfMap) {
   var headerMap = trackerInfo.headerMap;
   var rowNum = match.trackerRow.sheetRow;
@@ -572,7 +544,7 @@ function appendRawRecordToTracker_(sheet, trackerInfo, rawRecord, poPdfMap) {
   setRowValueByCol_(rowValues, statusCol, 'Ordered');
   setRowValueByCol_(rowValues, costCol, rawRecord.unitCost);
   setRowValueByCol_(rowValues, lineIdCol, generatePumaLineId_());
-  setRowValueByCol_(rowValues, reviewFlagCol, '');
+  setRowValueByCol_(rowValues, reviewFlagCol, 'PO_ONLY - no unique exact quoted-row match');
   setRowValueByCol_(rowValues, sourceTypeCol, 'PO_ONLY');
 
   var targetRange = sheet.getRange(targetRow, 1, 1, lastCol);
