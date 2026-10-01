@@ -539,10 +539,22 @@ function readRowsFromQuoteSpreadsheet_(spreadsheetId, quoteName) {
 
   const rows = [];
 
+  // Fail closed unless the configured source tab has a recognizable quotation
+  // header. This prevents a cover/summary/malformed first tab from driving
+  // tracker writes.
+  const header = findQuoteHeaderRow_(values);
+  if (!header) {
+    throw new Error(
+      'Configured quote first tab does not contain recognizable Qty / Part / Manufacturer headers: ' +
+      quoteSs.getName() + ' / ' + quoteSheet.getName()
+    );
+  }
+
   // Proven quote layout:
   // A Qty, B Type, C Description, D Manufacturer, E Part Number,
-  // F Total, G Cost Per Unit with Margin, H Cost Per Unit, K Total Cost
-  const START_ROW = 10; // 1-based
+  // F Total, G Cost Per Unit with Margin, H Cost Per Unit, K Total Cost.
+  // Data begins immediately after the recognized header row.
+  const START_ROW = header.rowIndex + 2; // 1-based
   const firstDataIndex = START_ROW - 1;
 
   let blankStreak = 0;
