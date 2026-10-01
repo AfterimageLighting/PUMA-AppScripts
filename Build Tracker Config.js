@@ -80,9 +80,17 @@ function buildTrackerConfig() {
       return;
     }
 
+    const familyCounts = {};
+    files.forEach(file => {
+      const family = pumaQuoteFamilyKey_(file.name || '', project);
+      if (family) familyCounts[family] = (familyCounts[family] || 0) + 1;
+    });
+
     files.forEach(file => {
       const quoteId = String(file.id || '').trim();
       const quoteName = String(file.name || '').trim();
+      const familyKey = pumaQuoteFamilyKey_(quoteName, project);
+      const familyCollision = familyKey && (familyCounts[familyKey] || 0) > 1;
       if (!quoteId || seenQuoteIds.has(quoteId)) return;
       seenQuoteIds.add(quoteId);
 
@@ -112,9 +120,24 @@ function buildTrackerConfig() {
       const approvedAndLocked = isApprovedAndLocked_(quoteId, quoteName);
       const canEnable = !!trackerName && !approvedAndLocked;
       const priorEnable = prior ? prior.enabled : undefined;
-      const enableValue = canEnable
-        ? (priorEnable !== undefined ? priorEnable : true)
+
+      // Existing configured quotes preserve their prior enable choice.
+      // Newly discovered quotes are NEVER auto-enabled; they require review.
+      const enableValue = canEnable && prior
+        ? Boolean(priorEnable)
         : false;
+
+      if (!prior && familyCollision) {
+        resolutionMethod = 'POSSIBLE_DUPLICATE_QUOTE_FAMILY';
+        resolutionNote =
+          'Multiple quote files in this project folder normalize to the same quote family. ' +
+          'New file is disabled until the correct version/scope is confirmed.';
+      } else if (!prior) {
+        resolutionMethod = resolutionMethod || 'NEW_QUOTE_DISCOVERED';
+        resolutionNote =
+          (resolutionNote ? resolutionNote + ' ' : '') +
+          'Newly discovered quote is disabled until reviewed.';
+      }
 
       output.push([
         enableValue,
@@ -129,6 +152,22 @@ function buildTrackerConfig() {
           : resolutionNote
       ]);
     });
+  });
+
+  // Preserve prior config references that were not rediscovered in the current
+  // direct-folder scan. Never silently drop them: keep them disabled for review.
+  priorMap.forEach((prior, quoteId) => {
+    if (seenQuoteIds.has(quoteId)) return;
+    output.push([
+      false,
+      prior.project || '',
+      prior.trackerName && ss.getSheetByName(prior.trackerName) ? prior.trackerName : '',
+      prior.dateUpdated || '',
+      prior.quoteName || '[Prior configured quote]',
+      quoteId,
+      'STALE_CONFIG_REFERENCE',
+      'Quote ID existed in prior Tracker config but was not rediscovered in the current Open Projects direct-folder scan. Preserved disabled for review.'
+    ]);
   });
 
   out.clearContents();
@@ -204,6 +243,40 @@ function getPriorEnableMap_(sheet) {
   rich.forEach((value, key) => simple.set(key, value.enabled));
   return simple;
 }
+
+function pumaQuoteFamilyKey_(quoteName, projectName) {
+  let name = String(quoteName || '').toLowerCase();
+  const projectKey = String(projectName || '')
+    .toLowerCase()
+    .replace(/\b(residence|project)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Remove obvious copy/version/date decorations, but KEEP scope words such as
+  // adder, decorative, bulb, heater, landscape, cove, etc.
+  name = name
+    .replace(/^copy of\s+/i, '')
+    .replace(/\bapproved\b/gi, ' ')
+    .replace(/\binternal use only\b/gi, ' ')
+    .replace(/\brev(?:ision)?\.?\s*\d+\b/gi, ' ')
+    .replace(/\b\d{6,8}\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (projectKey) {
+    const tokens = new Set(projectKey.split(' ').filter(Boolean));
+    name = name
+      .split(' ')
+      .filter(token => !tokens.has(token))
+      .join(' ')
+      .trim();
+  }
+
+  return name;
+}
+
 
 /**
  * Returns true if spreadsheet should be treated as "approved + locked" OR is unknown/inaccessible (fail-safe),
