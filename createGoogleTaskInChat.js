@@ -46,7 +46,15 @@ function createGoogleTaskInChat(e) {
   const messageText = parts.length ? `${task}\n${parts.join(' | ')}` : task;
   const payload = { text: messageText };
 
-  const webhookUrl = 'https://chat.googleapis.com/v1/spaces/AAQANZ7wX1U/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=0ApBRP_gsoG_aj7K3MPjdxQ0opy5VWN0YeivN4esxMg'; // keep key=... & token=...
+  const webhookUrl = PropertiesService.getScriptProperties().getProperty('PUMA_CHAT_WEBHOOK_URL') || '';
+  if (!webhookUrl) {
+    ss.toast('Chat webhook is not configured. No message sent.', 'PUMA', 5);
+    return;
+  }
+  if (typeof pumaIsTestWorkbook_ === 'function' && pumaIsTestWorkbook_()) {
+    ss.toast('PUMA TEST: Chat notifications are disabled.', 'PUMA', 5);
+    return;
+  }
   try {
     const res  = UrlFetchApp.fetch(webhookUrl, {
       method: 'post',
