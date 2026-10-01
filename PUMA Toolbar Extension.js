@@ -32,10 +32,6 @@ function onOpen(e) {
     .addItem('Add Audited Missing Quotes to Config', 'autoAddPumaMissingQuotesToConfig')
     .addSeparator()
     .addItem('Rebuild Tracker Config from Open Projects', 'buildTrackerConfig')
-    .addItem(
-      'Sync ALL Configured Quotes → Trackers',
-      'syncAllConfiguredTrackers'
-    )
     .addSeparator()
     .addItem('Test Soft Match: Active Tracker vs Live Quotes', 'testSoftMatchActiveTrackerVsLiveQuotes')
     .addItem('Controlled Write: Soft Match IDs + Flags', 'controlledWriteSoftMatchActiveTrackerVsLiveQuotes')
