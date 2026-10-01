@@ -1,5 +1,9 @@
 function testChatWebhook() {
-  const webhookUrl = 'https://chat.googleapis.com/v1/spaces/AAQANZ7wX1U/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=0ApBRP_gsoG_aj7K3MPjdxQ0opy5VWN0YeivN4esxMg'; // must have BOTH key=... & token=...
+  const webhookUrl = PropertiesService.getScriptProperties().getProperty('PUMA_CHAT_WEBHOOK_URL') || '';
+  if (!webhookUrl) throw new Error('PUMA_CHAT_WEBHOOK_URL is not configured.');
+  if (typeof pumaIsTestWorkbook_ === 'function' && pumaIsTestWorkbook_()) {
+    throw new Error('PUMA TEST: Chat webhook calls are disabled.');
+  }
   const payload = { text: 'Ping from Apps Script ✅' };
   const res = UrlFetchApp.fetch(webhookUrl, {
     method: 'post',
