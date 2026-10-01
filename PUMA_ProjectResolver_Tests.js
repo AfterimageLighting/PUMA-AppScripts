@@ -161,6 +161,90 @@ function pumaRunResolverUnitTests() {
     ambiguous && ambiguous.ambiguous === true
   );
 
+  var weakEvidence = pumaEvidenceProjectIds_({
+    poProjectIds: ['TRACKER_STOCK'],
+    partProjectIds: ['TRACKER_STOCK'],
+    poItemProjectIds: ['TRACKER_STOCK']
+  });
+
+  assertEqual(
+    'PO/part-only evidence cannot confirm a project',
+    weakEvidence.confirmed.length,
+    0
+  );
+
+  var strongEvidence = pumaEvidenceProjectIds_({
+    poPartQtyProjectIds: ['TRACKER_BAR'],
+    poTypePartQtyProjectIds: ['TRACKER_BAR']
+  });
+
+  assertEqual(
+    'Exact PO/Type/Part/Qty evidence can confirm one project',
+    strongEvidence.confirmed[0],
+    'TRACKER_BAR'
+  );
+
+  var missingOpenProjectRegistry = {
+    byId: {
+      TRACKER_STOCK: {
+        id: 'TRACKER_STOCK',
+        canonicalName: 'Misc Stock Purchases',
+        trackerName: 'Misc Stock Purchases - Project Tracker'
+      }
+    },
+    trackerToProjectId: {},
+    aliasToProjectIds: {},
+    openProjectsByKey: {
+      barb: [{project: 'Barb Residence', folderId: 'TEST_FOLDER'}]
+    },
+    projects: [{
+      id: 'TRACKER_STOCK',
+      canonicalName: 'Misc Stock Purchases',
+      trackerName: 'Misc Stock Purchases - Project Tracker',
+      trackerBase: 'Misc Stock Purchases',
+      aliases: ['Misc Stock Purchases']
+    }]
+  };
+
+  var guarded = pumaResolveProjectWithRegistry_(
+    missingOpenProjectRegistry,
+    'Parallel Construction:Barb Residence',
+    {
+      poPartQtyProjectIds: ['TRACKER_STOCK'],
+      poTypePartQtyProjectIds: ['TRACKER_STOCK']
+    }
+  );
+
+  assertEqual(
+    'Open Project without tracker cannot be rerouted by PO/item evidence',
+    guarded.status,
+    'REVIEW'
+  );
+
+  assertEqual(
+    'Missing Open Project tracker reports setup requirement',
+    guarded.method,
+    'OPEN_PROJECT_TRACKER_MISSING'
+  );
+
+  var brysonFolder = pumaExtractProjectNameFromFolderDetailed_('Bryson-Kleine Residence');
+  assertEqual(
+    'Legitimate hyphenated project name is preserved',
+    brysonFolder.projectName,
+    'Bryson-Kleine Residence'
+  );
+
+  var jonesFolder = pumaExtractProjectNameFromFolderDetailed_('Jones Residence- Energy Electric');
+  assertEqual(
+    'Recognized contractor suffix is removed safely',
+    jonesFolder.projectName,
+    'Jones Residence'
+  );
+  assertTrue(
+    'Recognized contractor suffix is marked safe',
+    jonesFolder.safe
+  );
+
   Logger.log('PUMA unit tests passed: ' + JSON.stringify(results));
   return results;
 }
