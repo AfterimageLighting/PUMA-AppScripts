@@ -258,6 +258,9 @@ function autoAddPumaMissingQuotesToConfig() {
   ]);
 
   const existingConfigIds = readPumaTrackerConfig_(ss).allQuoteIds;
+  const registry = (typeof pumaBuildProjectRegistry_ === 'function')
+    ? pumaBuildProjectRegistry_(ss)
+    : null;
 
   let added = 0;
   let skipped = 0;
@@ -288,10 +291,28 @@ function autoAddPumaMissingQuotesToConfig() {
       return;
     }
 
+    let trackerName = '';
+    if (registry && typeof pumaResolveProjectWithRegistry_ === 'function') {
+      const resolution = pumaResolveProjectWithRegistry_(registry, project, {});
+      if (resolution.status === 'CONFIRMED' && resolution.trackerSheetName) {
+        trackerName = resolution.trackerSheetName;
+      }
+    }
+
+    if (!trackerName || !ss.getSheetByName(trackerName)) {
+      skipped++;
+      // Leave action row open. A human/project setup decision is required.
+      if (idx['Owner Notes'] != null) {
+        actionsSheet.getRange(sheetRowNumber, idx['Owner Notes'] + 1)
+          .setValue('Not added: project does not resolve to one confirmed existing tracker.');
+      }
+      return;
+    }
+
     configSheet.appendRow([
-      true,
+      false, // New quote stays disabled until reviewed.
       project,
-      `${project} - Project Tracker`,
+      trackerName,
       new Date(),
       quoteName,
       quoteId
@@ -311,7 +332,7 @@ function autoAddPumaMissingQuotesToConfig() {
 
   const message =
   `Auto-add complete.\n\n` +
-  `Added to Tracker config: ${added}\n` +
+  `Added to Tracker config (disabled pending review): ${added}\n` +
   `Skipped/already present: ${skipped}`;
 
   Logger.log(message);
@@ -648,10 +669,16 @@ function indexPumaHeaders_(headers, requiredHeaders) {
  * Helper: normalize project names for matching.
  */
 function normalizePumaKey_(value) {
+  if (typeof pumaNormalizeProjectKey_ === 'function') {
+    return pumaNormalizeProjectKey_(value);
+  }
+
   return String(value || '')
     .toLowerCase()
     .replace(/\s+-\s+project tracker$/i, '')
     .replace(/\s+-\s+tasks$/i, '')
+    .replace(/\b(residence|project)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
