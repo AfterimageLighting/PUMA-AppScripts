@@ -26,7 +26,7 @@ function onOpen(e) {
    * Tracker Configuration
    * ========================= */
   const trackerConfigMenu = ui.createMenu('Tracker Configuration')
-    .addItem('Update Open Projects', 'TrackerConfig')
+    .addItem('Rebuild Tracker Config from Open Projects', 'buildTrackerConfig')
     .addItem(
       'Sync ALL Configured Quotes → Trackers',
       'syncAllConfiguredTrackers'
