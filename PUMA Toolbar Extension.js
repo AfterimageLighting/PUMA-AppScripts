@@ -26,11 +26,18 @@ function onOpen(e) {
    * Tracker Configuration
    * ========================= */
   const trackerConfigMenu = ui.createMenu('Tracker Configuration')
+    .addItem('Audit Open Projects Manifest (Read Only)', 'pumaAuditOpenProjectsManifest')
+    .addItem('Reconcile Open Projects Manifest', 'pumaSyncOpenProjectsManifest')
+    .addSeparator()
+    .addItem('Audit Missing Quotes (Read Only)', 'reportPumaMissingQuotes')
+    .addItem('Add Audited Missing Quotes to Config', 'autoAddPumaMissingQuotesToConfig')
+    .addSeparator()
     .addItem('Rebuild Tracker Config from Open Projects', 'buildTrackerConfig')
     .addItem(
       'Sync ALL Configured Quotes → Trackers',
       'syncAllConfiguredTrackers'
     )
+    .addSeparator()
     .addItem('Test Soft Match: Active Tracker vs Live Quotes', 'testSoftMatchActiveTrackerVsLiveQuotes')
     .addItem('Controlled Write: Soft Match IDs + Flags', 'controlledWriteSoftMatchActiveTrackerVsLiveQuotes')
     .addItem('Safe Sync Active Tracker', 'safeSyncActiveTracker')
