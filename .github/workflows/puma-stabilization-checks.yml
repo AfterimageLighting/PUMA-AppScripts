@@ -1,0 +1,161 @@
+name: PUMA Apps Script stabilization checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: JavaScript syntax check
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' f; do
+            echo "Checking $f"
+            node --check "$f"
+          done < <(find . -maxdepth 1 -type f -name '*.js' -print0)
+      - name: Check duplicate top-level function names
+        shell: bash
+        run: |
+          python - <<'PY'
+          import glob, re, collections, sys, json
+
+          owners = collections.defaultdict(list)
+          for path in glob.glob("*.js"):
+              text = open(path, encoding="utf-8").read()
+              for name in re.findall(r"^function\s+([A-Za-z0-9_$]+)\s*\(", text, re.M):
+                  owners[name].append(path)
+
+          dup = {k:v for k,v in owners.items() if len(v) > 1}
+          if dup:
+              print("Duplicate top-level Apps Script functions:")
+              print(json.dumps(dup, indent=2))
+              sys.exit(1)
+
+          if len(owners.get("onOpen", [])) != 1:
+              raise SystemExit(f"Expected exactly one onOpen, found {owners.get('onOpen', [])}")
+          if len(owners.get("onEdit", [])) != 1:
+              raise SystemExit(f"Expected exactly one onEdit, found {owners.get('onEdit', [])}")
+
+          print("Top-level function namespace is unique.")
+          PY
+      - name: Check menu and trigger handler targets
+        shell: bash
+        run: |
+          python - <<'PY'
+          import glob, re, sys, json
+
+          functions=set()
+          menu_targets=[]
+          trigger_targets=[]
+
+          for path in glob.glob("*.js"):
+              text=open(path, encoding="utf-8").read()
+              functions.update(re.findall(r"^function\s+([A-Za-z0-9_$]+)\s*\(", text, re.M))
+              menu_targets += [(path, x) for x in re.findall(
+                  r"\.addItem\(\s*['\"][^'\"]+['\"]\s*,\s*['\"]([A-Za-z0-9_$]+)['\"]\s*\)",
+                  text
+              )]
+              trigger_targets += [(path, x) for x in re.findall(
+                  r"\.newTrigger\(\s*['\"]([A-Za-z0-9_$]+)['\"]\s*\)",
+                  text
+              )]
+
+          missing_menu=[(p,t) for p,t in menu_targets if t not in functions]
+          missing_triggers=[(p,t) for p,t in trigger_targets if t not in functions]
+          if missing_menu or missing_triggers:
+              print(json.dumps({
+                  "missing_menu_targets": missing_menu,
+                  "missing_trigger_targets": missing_triggers,
+              }, indent=2))
+              sys.exit(1)
+
+          print(f"Validated {len(menu_targets)} menu handlers and {len(trigger_targets)} trigger handlers.")
+          PY
+      - name: Check source for embedded Chat webhook credentials
+        shell: bash
+        run: |
+          if grep -R --include='*.js' -n "chat.googleapis.com/v1/spaces/" .; then
+            echo "Embedded Google Chat webhook URL found in Apps Script source."
+            exit 1
+          fi
+          echo "No embedded Google Chat webhook URLs found."
+      - name: Prevent accidental production CLASP target
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, sys
+          obj=json.load(open(".clasp.json", encoding="utf-8"))
+          live="1ddj6ChwgU9bnUpO-by2EtkWFuQ2ZIno4lRwfLJOqt7ce6XQi-0kbWmMs"
+          script_id=obj.get("scriptId","")
+          test="1TBhtqb5-3L3z34ozM87-mlJmxNxkcWofyeScPnjlHkCRBIxKdXBpiDpp"
+          if script_id == live:
+              raise SystemExit("Stabilization branch points at LIVE Apps Script.")
+          if script_id != test:
+              raise SystemExit(f"Stabilization branch must point at the verified PUMA TEST Script ID, found: {script_id!r}")
+          print("Verified PUMA TEST Script ID:", script_id)
+          PY
+      - name: Check stabilization safety invariants
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          legacy = Path("syncALLConfiguredTrackers.js").read_text(encoding="utf-8")
+          toolbar = Path("PUMA Toolbar Extension.js").read_text(encoding="utf-8")
+          soft = Path("PUMA_SoftMatch.js").read_text(encoding="utf-8")
+          safe = Path("PUMA_SafeSync.js").read_text(encoding="utf-8")
+          po = Path("PO Importer.js").read_text(encoding="utf-8")
+
+          alias = re.search(
+              r"function\s+syncAllConfiguredTrackers\s*\(\)\s*\{(?P<body>.*?)\n\}",
+              legacy,
+              re.S,
+          )
+          if not alias or "safeSyncALLConfiguredTrackers()" not in alias.group("body"):
+              raise SystemExit("Legacy sync entry must redirect to Safe Sync.")
+
+          disabled = re.search(
+              r"function\s+legacySyncAllConfiguredTrackersUnsafe_\s*\(\)\s*\{(?P<body>.*?)\n\}",
+              legacy,
+              re.S,
+          )
+          if not disabled or "throw new Error" not in disabled.group("body"):
+              raise SystemExit("Legacy destructive sync entry is not disabled.")
+
+          if "Sync ALL Configured Quotes → Trackers" in toolbar:
+              raise SystemExit("Destructive legacy sync is still exposed in the PUMA menu.")
+
+          required_soft = [
+              "if (!enabled) continue;",
+              "Tracker config is missing Enable? column.",
+              "Configured quote first tab does not contain recognizable",
+              "sourceType !== 'PO_ONLY'",
+              "sourceType !== 'MANUAL'",
+          ]
+          for needle in required_soft:
+              if needle not in soft and needle not in safe:
+                  raise SystemExit(f"Missing Safe Sync guard: {needle}")
+
+          required_po = [
+              "TEST_PO_ROOT_FOLDER_ID: '1EeexxItqTX896tq64lf1-8lBz2bqCBmH'",
+              "LIVE_PO_ROOT_FOLDER_ID: '1VlCypDA_iF5dEUmA9c3E7ABYyS4-m6W2'",
+              "if (!rawPart) return null;",
+              "PO_ONLY - no unique exact quoted-row match",
+          ]
+          for needle in required_po:
+              if needle not in po:
+                  raise SystemExit(f"Missing PO importer guard: {needle}")
+
+          if "DriveApp.searchFiles" in po:
+              raise SystemExit("PO importer must not fall back to Drive-wide PDF search.")
+
+          print("Stabilization safety invariants validated.")
+          PY

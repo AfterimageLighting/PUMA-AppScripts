@@ -27,7 +27,9 @@ const PUMA_SOFT_MATCH = {
     notes: ['Notes', 'Internal Notes'],
     pumaLineId: ['PUMA_LINE_ID'],
     fingerprint: ['PUMA_FINGERPRINT'],
-    reviewFlag: ['PUMA_REVIEW_FLAG']
+    reviewFlag: ['PUMA_REVIEW_FLAG'],
+    source: ['Source'],
+    sourceType: ['PUMA_SOURCE_TYPE']
   }
 };
 
@@ -99,8 +101,15 @@ function softMatchRows_(existingRows, incomingRows) {
   const results = [];
   const usedExistingIds = new Set();
 
-  const exactMap = buildExactMatchMap_(existingRows);
-  const typeMap = buildTypeMatchMap_(existingRows);
+  const matchableExistingRows = existingRows.filter(row => {
+    const sourceType = String(row.sourceType || '').trim().toUpperCase();
+    return sourceType !== 'PO_ONLY' &&
+           sourceType !== 'MANUAL' &&
+           sourceType !== 'UNKNOWN';
+  });
+
+  const exactMap = buildExactMatchMap_(matchableExistingRows);
+  const typeMap = buildTypeMatchMap_(matchableExistingRows);
 
   incomingRows.forEach(incoming => {
     const exactKey = buildQuoteFingerprint_(incoming);
@@ -117,7 +126,7 @@ function softMatchRows_(existingRows, incomingRows) {
         confidence: 'HIGH',
         incoming,
         existing: availableExact,
-        pumaLineId: availableExact.pumaLineId || generatePumaLineId_(),
+        pumaLineId: availableExact.pumaLineId || generateSoftMatchPumaLineId_(),
         reviewFlag: '',
         reason: 'Type, manufacturer, part number, and quantity match exactly.'
       });
@@ -139,7 +148,7 @@ function softMatchRows_(existingRows, incomingRows) {
         confidence: 'MEDIUM',
         incoming,
         existing: soft,
-        pumaLineId: soft.pumaLineId || generatePumaLineId_(),
+        pumaLineId: soft.pumaLineId || generateSoftMatchPumaLineId_(),
         reviewFlag: buildReviewFlag_(soft, incoming),
         reason: 'Type matched uniquely, but manufacturer, part number, or quantity changed.'
       });
@@ -154,7 +163,7 @@ function softMatchRows_(existingRows, incomingRows) {
         confidence: 'LOW',
         incoming,
         existing: null,
-        pumaLineId: generatePumaLineId_(),
+        pumaLineId: generateSoftMatchPumaLineId_(),
         reviewFlag: 'Multiple existing rows share this Type. Manual review required.',
         reason: 'Type is not unique in the existing tracker.'
       });
@@ -168,7 +177,7 @@ function softMatchRows_(existingRows, incomingRows) {
       confidence: 'HIGH',
       incoming,
       existing: null,
-      pumaLineId: generatePumaLineId_(),
+      pumaLineId: generateSoftMatchPumaLineId_(),
       reviewFlag: '',
       reason: 'No exact or type match found.'
     });
@@ -183,7 +192,7 @@ function softMatchRows_(existingRows, incomingRows) {
       confidence: 'HIGH',
       incoming: null,
       existing,
-      pumaLineId: existing.pumaLineId || generatePumaLineId_(),
+      pumaLineId: existing.pumaLineId || generateSoftMatchPumaLineId_(),
       reviewFlag: 'Existing tracker row not found in latest quote import.',
       reason: 'Existing row has no incoming exact or soft match.'
     });
@@ -213,6 +222,25 @@ function readTrackerRowsForSoftMatch_(sheet) {
 
     if (!type && !manufacturer && !partNumber && !qty) continue;
 
+    const source = getCellByIndex_(row, col.source);
+    const po = getCellByIndex_(row, col.po);
+    const explicitSourceType = String(getCellByIndex_(row, col.sourceType) || '').trim().toUpperCase();
+
+    let sourceType = explicitSourceType;
+    if (!sourceType) {
+      if (/quot/i.test(String(source || ''))) {
+        sourceType = 'QUOTE';
+      } else if (po) {
+        sourceType = 'PO_ONLY';
+      } else if (!source && type) {
+        sourceType = 'MANUAL';
+      } else {
+        // Legacy rows that cannot be classified confidently remain matchable,
+        // but removed rows will still be treated conservatively by Safe Sync.
+        sourceType = 'LEGACY';
+      }
+    }
+
     rows.push({
       matchId: `ROW_${r + 1}`,
       sourceRow: r + 1,
@@ -220,8 +248,10 @@ function readTrackerRowsForSoftMatch_(sheet) {
       manufacturer,
       partNumber,
       qty,
+      source,
+      sourceType,
       status: getCellByIndex_(row, col.status),
-      po: getCellByIndex_(row, col.po),
+      po,
       esd: getCellByIndex_(row, col.esd),
       notes: getCellByIndex_(row, col.notes),
       pumaLineId: getCellByIndex_(row, col.pumaLineId),
@@ -244,10 +274,10 @@ function buildSoftMatchColumnMap_(headers) {
 }
 
 function findHeaderByAliases_(headers, aliases) {
-  const normalizedHeaders = headers.map(h => normalizeHeader_(h));
+  const normalizedHeaders = headers.map(h => normalizeSoftMatchHeader_(h));
 
   for (let i = 0; i < aliases.length; i++) {
-    const target = normalizeHeader_(aliases[i]);
+    const target = normalizeSoftMatchHeader_(aliases[i]);
     const idx = normalizedHeaders.indexOf(target);
     if (idx !== -1) return idx;
   }
@@ -255,7 +285,7 @@ function findHeaderByAliases_(headers, aliases) {
   return -1;
 }
 
-function normalizeHeader_(value) {
+function normalizeSoftMatchHeader_(value) {
   return String(value || '')
     .toLowerCase()
     .replace(/[^\w]+/g, '')
@@ -333,7 +363,7 @@ function buildReviewFlag_(existing, incoming) {
   return changes.join(' | ');
 }
 
-function generatePumaLineId_() {
+function generateSoftMatchPumaLineId_() {
   return 'PUMA-LINE-' + Utilities.getUuid().slice(0, 8);
 }
 
@@ -470,12 +500,25 @@ function readLiveQuoteRowsForTracker_(ss, trackerSheetName) {
 
   const headers = values[0].map(h => String(h || '').trim());
 
+  let enableIdx = findHeaderByAliases_(headers, [
+    'Enable?',
+    'Enable',
+    'Enabled'
+  ]);
+
   const trackerIdx = findHeaderByAliases_(headers, [
     'Tracker Sheet Name',
     'trackerName',
     'Tracker Name',
     'Tracker'
   ]);
+
+  // Legacy live PUMA has a blank A1 while B/C still identify the known config
+  // layout. Treat column A as Enable? only in that exact layout.
+  const projectIdx = findHeaderByAliases_(headers, ['Project']);
+  if (enableIdx === -1 && projectIdx === 1 && trackerIdx === 2) {
+    enableIdx = 0;
+  }
 
   const quoteIdIdx = findHeaderByAliases_(headers, [
     'Quote Sheet ID',
@@ -489,6 +532,7 @@ function readLiveQuoteRowsForTracker_(ss, trackerSheetName) {
     'Quote'
   ]);
 
+  if (enableIdx === -1) throw new Error('Tracker config is missing Enable? column.');
   if (trackerIdx === -1) throw new Error('Tracker config is missing Tracker Sheet Name column.');
   if (quoteIdIdx === -1) throw new Error('Tracker config is missing Quote Sheet ID column.');
 
@@ -496,10 +540,13 @@ function readLiveQuoteRowsForTracker_(ss, trackerSheetName) {
   const trackerNorm = normalizeSoftMatchPart_(trackerSheetName);
 
   for (let r = 1; r < values.length; r++) {
+    const enabled = values[r][enableIdx] === true ||
+      String(values[r][enableIdx] || '').trim().toLowerCase() === 'true';
     const configTracker = String(values[r][trackerIdx] || '').trim();
     const quoteSheetId = String(values[r][quoteIdIdx] || '').trim();
     const quoteName = quoteNameIdx !== -1 ? String(values[r][quoteNameIdx] || '').trim() : '';
 
+    if (!enabled) continue;
     if (!configTracker || !quoteSheetId) continue;
     if (normalizeSoftMatchPart_(configTracker) !== trackerNorm) continue;
 
@@ -522,10 +569,22 @@ function readRowsFromQuoteSpreadsheet_(spreadsheetId, quoteName) {
 
   const rows = [];
 
+  // Fail closed unless the configured source tab has a recognizable quotation
+  // header. This prevents a cover/summary/malformed first tab from driving
+  // tracker writes.
+  const header = findQuoteHeaderRow_(values);
+  if (!header) {
+    throw new Error(
+      'Configured quote first tab does not contain recognizable Qty / Part / Manufacturer headers: ' +
+      quoteSs.getName() + ' / ' + quoteSheet.getName()
+    );
+  }
+
   // Proven quote layout:
   // A Qty, B Type, C Description, D Manufacturer, E Part Number,
-  // F Total, G Cost Per Unit with Margin, H Cost Per Unit, K Total Cost
-  const START_ROW = 10; // 1-based
+  // F Total, G Cost Per Unit with Margin, H Cost Per Unit, K Total Cost.
+  // Data begins immediately after the recognized header row.
+  const START_ROW = header.rowIndex + 2; // 1-based
   const firstDataIndex = START_ROW - 1;
 
   let blankStreak = 0;
@@ -608,18 +667,18 @@ function readRowsFromQuoteSpreadsheet_(spreadsheetId, quoteName) {
  */
 function findQuoteHeaderRow_(values) {
   for (let r = 0; r < Math.min(values.length, 25); r++) {
-    const headers = values[r].map(h => normalizeHeader_(h));
+    const headers = values[r].map(h => normalizeSoftMatchHeader_(h));
 
-    const hasPart = headers.indexOf(normalizeHeader_('Part Number')) !== -1 ||
-                    headers.indexOf(normalizeHeader_('Part #')) !== -1 ||
-                    headers.indexOf(normalizeHeader_('Part')) !== -1;
+    const hasPart = headers.indexOf(normalizeSoftMatchHeader_('Part Number')) !== -1 ||
+                    headers.indexOf(normalizeSoftMatchHeader_('Part #')) !== -1 ||
+                    headers.indexOf(normalizeSoftMatchHeader_('Part')) !== -1;
 
-    const hasQty = headers.indexOf(normalizeHeader_('Quantity')) !== -1 ||
-                   headers.indexOf(normalizeHeader_('Qty')) !== -1;
+    const hasQty = headers.indexOf(normalizeSoftMatchHeader_('Quantity')) !== -1 ||
+                   headers.indexOf(normalizeSoftMatchHeader_('Qty')) !== -1;
 
-    const hasMfg = headers.indexOf(normalizeHeader_('Manufacturer')) !== -1 ||
-                   headers.indexOf(normalizeHeader_('MFG')) !== -1 ||
-                   headers.indexOf(normalizeHeader_('Vendor')) !== -1;
+    const hasMfg = headers.indexOf(normalizeSoftMatchHeader_('Manufacturer')) !== -1 ||
+                   headers.indexOf(normalizeSoftMatchHeader_('MFG')) !== -1 ||
+                   headers.indexOf(normalizeSoftMatchHeader_('Vendor')) !== -1;
 
     if (hasPart && hasQty && hasMfg) {
       return { rowIndex: r };
@@ -684,7 +743,7 @@ function controlledWriteSoftMatchActiveTrackerVsLiveQuotes() {
 
     const rowNum = existing.sourceRow;
 
-    tracker.getRange(rowNum, writeCols.pumaLineId).setValue(result.pumaLineId || existing.pumaLineId || generatePumaLineId_());
+    tracker.getRange(rowNum, writeCols.pumaLineId).setValue(result.pumaLineId || existing.pumaLineId || generateSoftMatchPumaLineId_());
 
     tracker.getRange(rowNum, writeCols.reviewFlag).setValue(result.reviewFlag || '');
 

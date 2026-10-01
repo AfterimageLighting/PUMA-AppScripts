@@ -263,7 +263,15 @@ function appendNewQuoteLines_(sheet, results, col) {
   let appended = 0;
 
   const existing = readTrackerRowsForSoftMatch_(sheet);
-  const existingFingerprints = new Set(existing.map(r => buildQuoteFingerprint_(r)).filter(Boolean));
+  const quoteLikeExisting = existing.filter(r => {
+    const sourceType = String(r.sourceType || '').trim().toUpperCase();
+    return sourceType !== 'PO_ONLY' &&
+           sourceType !== 'MANUAL' &&
+           sourceType !== 'UNKNOWN';
+  });
+  const existingFingerprints = new Set(
+    quoteLikeExisting.map(r => buildQuoteFingerprint_(r)).filter(Boolean)
+  );
 
   results.forEach(result => {
     if (result.tier !== 'NEW_LINE') return;

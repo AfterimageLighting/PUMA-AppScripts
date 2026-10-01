@@ -37,8 +37,14 @@ function safeSyncALLConfiguredTrackers() {
 
   const headers = values[0].map(h => String(h || '').trim());
 
-  const enableIdx = findSafeSyncAllHeader_(headers, ['Enable?', 'Enable', 'Enabled']);
+  let enableIdx = findSafeSyncAllHeader_(headers, ['Enable?', 'Enable', 'Enabled']);
   const trackerIdx = findSafeSyncAllHeader_(headers, ['Tracker Sheet Name', 'trackerName', 'Tracker Name', 'Tracker']);
+  const projectIdx = findSafeSyncAllHeader_(headers, ['Project']);
+
+  // Legacy PUMA has a blank A1 while column A contains checkbox values.
+  if (enableIdx === -1 && projectIdx === 1 && trackerIdx === 2) {
+    enableIdx = 0;
+  }
 
   if (enableIdx === -1 || trackerIdx === -1) {
     ui.alert('Tracker config missing Enable? or Tracker Sheet Name column.');
@@ -49,6 +55,7 @@ function safeSyncALLConfiguredTrackers() {
   let success = 0;
   let skipped = 0;
   let failed = 0;
+  const processedTrackers = new Set();
 
   for (let r = 1; r < values.length; r++) {
     const enabled = isSafeSyncAllEnabled_(values[r][enableIdx]);
@@ -61,6 +68,13 @@ function safeSyncALLConfiguredTrackers() {
       logRows.push([trackerName, 'SKIPPED', 'Not enabled']);
       continue;
     }
+
+    if (processedTrackers.has(trackerName)) {
+      skipped++;
+      logRows.push([trackerName, 'SKIPPED', 'Already synced from another enabled config row']);
+      continue;
+    }
+    processedTrackers.add(trackerName);
 
     const tracker = ss.getSheetByName(trackerName);
 

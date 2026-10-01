@@ -5,7 +5,7 @@
 
 const PUMA = {
   SHEETS: {
-    TRACKER_CONFIG: 'Tracker Config',
+    TRACKER_CONFIG: 'Tracker config',
     DASHBOARD: 'Dashboard',
     RAW_PO_IMPORT: 'RAW_PO_IMPORT',
     ESD: 'ESD'
@@ -20,6 +20,15 @@ const PUMA = {
   },
 
   SETTINGS: {
-    MAX_RUNTIME_MS: 5 * 60 * 1000
+    MAX_RUNTIME_MS: 5 * 60 * 1000,
+    TEST_SPREADSHEET_ID: '1wjGB4dUTbBUiWVC7Kh0huVw8wM_ppmjTgktLw6ElVf4'
   }
 };
+
+function pumaIsTestWorkbook_() {
+  try {
+    return SpreadsheetApp.getActive().getId() === PUMA.SETTINGS.TEST_SPREADSHEET_ID;
+  } catch (err) {
+    return false;
+  }
+}

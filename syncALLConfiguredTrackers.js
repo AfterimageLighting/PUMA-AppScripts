@@ -4,147 +4,15 @@ const QUOTE_START_ROW = 10;
 const QUOTE_BG_CHECK_COLUMN = 2; // use column B to detect grey area
 
 function syncAllConfiguredTrackers() {
-  var ss = SpreadsheetApp.getActive();
-  var configSheet = getTrackerConfigSheet_(ss);
+  // Backward-compatible safe alias. The historical implementation cleared
+  // broad tracker ranges and could overwrite PO/manual operational data.
+  return safeSyncALLConfiguredTrackers();
+}
 
-  if (!configSheet) {
-    throw new Error('Config sheet "Tracker config" not found.');
-  }
-
-  var lastRow = configSheet.getLastRow();
-  if (lastRow < 2) {
-    Logger.log('No config rows found on Tracker config.');
-    return;
-  }
-
-  // Tracker config layout:
-  // A = Enable?
-  // B = Project
-  // C = trackerName
-  // D = Date Updated
-  // E = Quote Name   (for logging only)
-  // F = Quote Sheet ID
-  var data = configSheet.getRange(2, 1, lastRow - 1, 6).getValues();
-
-  // Tracks next available write row per tracker sheet during this run
-  var nextRowByTracker = {};
-
-  // Tracks project-level closing result per tracker
-  // default will become 85% once tracker is encountered
-  var closingByTracker = {}; // { trackerName: 'Probability of close 85%' or 'Probability of close 100%' }
-
-  data.forEach(function(row, idx) {
-    var rowNum      = idx + 2;
-    var enabled     = row[0]; // A
-    var projectName = row[1]; // B
-    var trackerName = row[2]; // C
-    var quoteLabel  = row[4]; // E
-    var quoteId     = row[5]; // F
-
-    if (enabled !== true) {
-      Logger.log('Row ' + rowNum + ' (' + projectName + ') disabled; skipping.');
-      return;
-    }
-
-    if (!trackerName) {
-      Logger.log('Row ' + rowNum + ' (' + projectName + ') missing trackerName; skipping.');
-      return;
-    }
-
-    try {
-      // First time we encounter this tracker in the run
-      if (nextRowByTracker[trackerName] === undefined) {
-        ensureTopProbabilitySpacer_(trackerName);
-        clearQuoteSpacerRows_(trackerName);
-        nextRowByTracker[trackerName] = 4;
-
-        // Default project closing to 85% unless a qualifying approved quote upgrades it
-        closingByTracker[trackerName] = 'Probability of close 85%';
-      }
-
-      // If no quote ID, leave this tracker at default 85%
-      if (!quoteId) {
-        Logger.log(
-          'Row ' + rowNum +
-          ' (' + projectName + ')' +
-          ' | Tracker: ' + trackerName +
-          ' | Quote: ' + (quoteLabel || '[Unnamed Quote]') +
-          ' | No Quote Sheet ID; leaving project closing at 85%.'
-        );
-        return;
-      }
-
-      var startRow = nextRowByTracker[trackerName];
-
-      Logger.log(
-        'Syncing row ' + rowNum +
-        ' | Project: ' + projectName +
-        ' | Tracker: ' + trackerName +
-        ' | Quote: ' + (quoteLabel || '[Unnamed Quote]') +
-        ' | Start Row: ' + startRow
-      );
-
-      var result = syncQuoteToTracker_(quoteId, trackerName, startRow, quoteLabel);
-
-      // Only insert quote spacer if rows were actually written
-      if (result.numRows > 0) {
-        insertQuoteSpacerRows_(trackerName, result.nextRow);
-        nextRowByTracker[trackerName] = result.nextRow + 2;
-      }
-
-      // Upgrade tracker/project closing to 100% if:
-      // - quote parsed
-      // - first tab is protected
-      // - first tab name contains "-Approved"
-      if (result.numRows > 0 && result.isApprovedLocked === true) {
-        closingByTracker[trackerName] = 'Probability of close 100%';
-      }
-
-      // Stamp Date Updated on success
-      configSheet.getRange(rowNum, 4).setValue(new Date());
-
-      Logger.log(
-        'Finished row ' + rowNum +
-        ' | Project: ' + projectName +
-        ' | Tracker: ' + trackerName +
-        ' | Quote: ' + (quoteLabel || '[Unnamed Quote]') +
-        ' | Source Tab Used: ' + result.sourceTabName +
-        ' | Parsed Rows: ' + result.numRows +
-        ' | Approved+Locked: ' + result.isApprovedLocked +
-        ' | Next Row: ' + result.nextRow
-      );
-
-    } catch (e) {
-      Logger.log(
-        'Error syncing row ' + rowNum +
-        ' (' + projectName + ')' +
-        ' | Tracker: ' + trackerName +
-        ' | Quote: ' + (quoteLabel || '[Unnamed Quote]') +
-        ' | Error: ' + e
-      );
-
-      // If a quote errors, tracker remains at default 85%
-      if (closingByTracker[trackerName] === undefined) {
-        closingByTracker[trackerName] = 'Probability of close 85%';
-      }
-    }
-  });
-
-  // After all quotes are processed, set the project-level closing dropdown in A3
-  Object.keys(closingByTracker).forEach(function(trackerName) {
-    try {
-      setTrackerProjectClosing_(trackerName, closingByTracker[trackerName]);
-      Logger.log(
-        'Set project closing for tracker "' + trackerName +
-        '" to "' + closingByTracker[trackerName] + '".'
-      );
-    } catch (e) {
-      Logger.log(
-        'Failed setting project closing for tracker "' + trackerName +
-        '": ' + e
-      );
-    }
-  });
+function legacySyncAllConfiguredTrackersUnsafe_() {
+  throw new Error(
+    'Legacy destructive quote sync is disabled. Use safeSyncALLConfiguredTrackers instead.'
+  );
 }
 
 

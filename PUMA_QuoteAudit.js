@@ -5,10 +5,10 @@
  * 1) REPORT ONLY:
  *    Scan Open Projects folders for quotation Google Sheets.
  *    Compare found quote spreadsheet IDs against Tracker config.
- *    Write missing quote actions to PUMA_AUDIT_ACTIONS.
+ *    Write missing quote actions to PUMA_QUOTE_AUDIT_ACTIONS.
  *
  * 2) AUTO ADD:
- *    Read PUMA_AUDIT_ACTIONS rows created by this report.
+ *    Read PUMA_QUOTE_AUDIT_ACTIONS rows created by this report.
  *    Add missing quote spreadsheet IDs to Tracker config.
  *
  * Requires:
@@ -28,8 +28,8 @@
 const PUMA_QUOTE_AUDIT = {
   OPEN_PROJECTS_SHEET: 'Open Projects',
   TRACKER_CONFIG_SHEET: 'Tracker config',
-  ACTIONS_SHEET: 'PUMA_AUDIT_ACTIONS',
-  OPEN_PROJECTS_PARENT_FOLDER_ID: '1acRZOrQUIzholav1Rw8d2GPosaDvNWx5',
+  ACTIONS_SHEET: 'PUMA_QUOTE_AUDIT_ACTIONS',
+  OPEN_PROJECTS_PARENT_FOLDER_ID: '1acRZOrQUIzhoIav1Rw8d2GPosaDvNWx5',
 
   ACTION_CLASSIFICATION: 'QUOTE_SYNC',
   ACTION_ADD_MISSING: 'ADD MISSING QUOTE TO CONFIG',
@@ -212,7 +212,7 @@ function reportPumaMissingQuotes() {
 /**
  * AUTO ADD.
  *
- * Reads PUMA_AUDIT_ACTIONS and adds rows to Tracker config
+ * Reads PUMA_QUOTE_AUDIT_ACTIONS and adds rows to Tracker config
  * for missing quote IDs detected by reportPumaMissingQuotes().
  *
  * Only touches rows where:
@@ -258,6 +258,9 @@ function autoAddPumaMissingQuotesToConfig() {
   ]);
 
   const existingConfigIds = readPumaTrackerConfig_(ss).allQuoteIds;
+  const registry = (typeof pumaBuildProjectRegistry_ === 'function')
+    ? pumaBuildProjectRegistry_(ss)
+    : null;
 
   let added = 0;
   let skipped = 0;
@@ -288,10 +291,28 @@ function autoAddPumaMissingQuotesToConfig() {
       return;
     }
 
+    let trackerName = '';
+    if (registry && typeof pumaResolveProjectWithRegistry_ === 'function') {
+      const resolution = pumaResolveProjectWithRegistry_(registry, project, {});
+      if (resolution.status === 'CONFIRMED' && resolution.trackerSheetName) {
+        trackerName = resolution.trackerSheetName;
+      }
+    }
+
+    if (!trackerName || !ss.getSheetByName(trackerName)) {
+      skipped++;
+      // Leave action row open. A human/project setup decision is required.
+      if (idx['Owner Notes'] != null) {
+        actionsSheet.getRange(sheetRowNumber, idx['Owner Notes'] + 1)
+          .setValue('Not added: project does not resolve to one confirmed existing tracker.');
+      }
+      return;
+    }
+
     configSheet.appendRow([
-      true,
+      false, // New quote stays disabled until reviewed.
       project,
-      `${project} - Project Tracker`,
+      trackerName,
       new Date(),
       quoteName,
       quoteId
@@ -311,7 +332,7 @@ function autoAddPumaMissingQuotesToConfig() {
 
   const message =
   `Auto-add complete.\n\n` +
-  `Added to Tracker config: ${added}\n` +
+  `Added to Tracker config (disabled pending review): ${added}\n` +
   `Skipped/already present: ${skipped}`;
 
   Logger.log(message);
@@ -429,95 +450,146 @@ function listPumaQuoteSheetsInFolder_(folderId) {
       includeItemsFromAllDrives: true
     });
 
-    const files = resp.files || [];
-
-    files.forEach(file => {
-     const name = String(file.name || '').toLowerCase();
-
-     const strongNameMatch =
-       name.includes('quote') ||
-       name.includes('quotation') ||
-       name.includes('adder') ||
-       name.includes('architectural') ||
-       name.includes('decorative') ||
-       name.includes('heater') ||
-       name.includes('lighting');
-
-     if (strongNameMatch) {
-       results.push({
-         id: file.id,
-         name: file.name
-       });
-       return;
-     }
-
-    // TEMP TEST MODE:
-    // Do not open unclear spreadsheets yet. Opening many spreadsheets is slow.
-    return;
+    (resp.files || []).forEach(file => {
+      const classification = classifyPumaQuotationFile_(file);
+      if (classification.isQuote) {
+        results.push({
+          id: file.id,
+          name: file.name,
+          confidence: classification.confidence,
+          reason: classification.reason
+        });
+      }
     });
 
     pageToken = resp.nextPageToken;
   } while (pageToken);
 
-  results.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  results.sort((a, b) => a.name.localeCompare(b.name));
   return results;
 }
 
+
 /**
- * Determines whether a Google Sheet file is probably a PUMA quotation.
+ * Determine whether a Google Sheet is a PUMA quotation.
  *
- * First pass: name-based filter.
- * Second pass: lightweight spreadsheet fingerprint check.
- *
- * If the name strongly suggests quote/adderr and the file cannot be opened,
- * we still include it so it appears for review instead of silently disappearing.
+ * Name alone is not authoritative. We inspect the workbook structure so
+ * non-standard but legitimate names (e.g. "Sayler Residence Deco") can pass,
+ * while obvious billing/inventory sheets do not get imported just because
+ * they contain the word "lighting".
  */
-function isLikelyPumaQuotation_(file) {
-  const name = String(file.name || '').toLowerCase();
+function classifyPumaQuotationFile_(file) {
+  const name = String(file && file.name || '').trim();
+  const lower = name.toLowerCase();
 
-  const nameLooksLikeQuote =
-    name.includes('quote') ||
-    name.includes('quotation') ||
-    name.includes('adder') ||
-    name.includes('architectural') ||
-    name.includes('decorative') ||
-    name.includes('heater');
+  const obviousNegative =
+    /\b(billing|invoice|inventory|packing slip|receiving|delivery report|tracker|tasks|dashboard|summary)\b/i.test(lower) ||
+    /^alig\b/i.test(lower);
 
-  if (!nameLooksLikeQuote) return false;
+  const strongName =
+    /\b(quote|quotation|adder|architectural|decorative|heater|landscape lighting|lighting quotation|downlighting|reconcilliation|reconciliation)\b/i.test(lower);
 
   try {
     const qss = SpreadsheetApp.openById(file.id);
-    const sheet = qss.getSheets()[0];
-    if (!sheet) return true;
+    const sheets = qss.getSheets();
+    if (!sheets.length) {
+      return {isQuote: false, confidence: 'NONE', reason: 'Spreadsheet has no tabs.'};
+    }
 
-    const f3 = String(sheet.getRange('F3').getDisplayValue() || '').toLowerCase();
+    // Inspect up to the first 5 tabs and first 15 rows. Quote workbooks vary
+    // between Master Quotation, Approved, and dated/working tabs.
+    for (let s = 0; s < Math.min(sheets.length, 5); s++) {
+      const sheet = sheets[s];
+      const lastCol = Math.max(1, Math.min(sheet.getLastColumn(), 16));
+      const lastRow = Math.max(1, Math.min(sheet.getLastRow(), 15));
+      const values = sheet.getRange(1, 1, lastRow, lastCol).getDisplayValues();
 
-    const row9 = sheet
-      .getRange(9, 1, 1, Math.min(12, sheet.getLastColumn()))
-      .getDisplayValues()[0]
-      .map(v => String(v || '').toLowerCase());
+      const flattened = values
+        .reduce((acc, row) => acc.concat(row), [])
+        .map(v => String(v || '').toLowerCase());
 
-    const joinedRow9 = row9.join(' | ');
+      const joined = flattened.join(' | ');
+      const hasQuotationTitle = joined.includes('quotation');
+      const hasQty = flattened.some(v => /^(qty|quantity|qnty)$/i.test(v.trim()));
+      const hasDescription = flattened.some(v => v.trim() === 'description');
+      const hasManufacturer = flattened.some(v => /^(manufacturer|mfg|vendor)$/i.test(v.trim()));
+      const hasPart = flattened.some(v => /^(part number|part #|part no\.?|product number)$/i.test(v.trim()));
+      const hasPricing = flattened.some(v =>
+        /cost per unit|unit price|total cost|margin|extended|sell price/i.test(v)
+      );
 
-    const hasQuotationTitle = f3.includes('quotation');
-    const hasQuoteHeaders =
-      joinedRow9.includes('qty') &&
-      joinedRow9.includes('description') &&
-      joinedRow9.includes('manufacturer') &&
-      joinedRow9.includes('part number');
+      // A blank quotation template has all of the headers but no real line
+      // items. Require at least one populated item row before it can be
+      // considered a live quotation.
+      let populatedItemRows = 0;
+      for (let r = 0; r < values.length; r++) {
+        const row = values[r].map(v => String(v || '').trim());
+        const numericQty = row.some(v => /^\d+(?:\.\d+)?$/.test(v) && Number(v) > 0);
+        const meaningfulText = row.some(v =>
+          v && !/^(qty|quantity|type|description|manufacturer|mfg|part number|part #|total|cost per unit|margin|profit)$/i.test(v)
+        );
+        const hasLikelyItemIdentity = row.some(v =>
+          /[A-Za-z].*\d|\d.*[A-Za-z]|[-\/]/.test(v)
+        );
+        if (numericQty && meaningfulText && hasLikelyItemIdentity) populatedItemRows++;
+      }
 
-    return hasQuotationTitle || hasQuoteHeaders;
+      const structuralHeaders = hasQty && hasDescription && hasManufacturer && hasPart;
+      const populatedQuote =
+        populatedItemRows > 0 &&
+        (hasQuotationTitle || structuralHeaders || (hasQty && hasPart && hasPricing));
+
+      if (populatedQuote) {
+        return {
+          isQuote: true,
+          confidence: strongName ? 'HIGH' : 'STRUCTURAL',
+          reason: strongName
+            ? 'Quote-like name, quotation structure, and populated item rows detected.'
+            : 'Quotation structure and populated item rows detected despite non-standard file name.'
+        };
+      }
+
+      if ((hasQuotationTitle || structuralHeaders) && populatedItemRows === 0) {
+        return {
+          isQuote: false,
+          confidence: 'TEMPLATE',
+          reason: 'Quotation template/structure detected but no populated item rows.'
+        };
+      }
+    }
+
+    if (obviousNegative) {
+      return {isQuote: false, confidence: 'HIGH', reason: 'Non-quotation business sheet by name/structure.'};
+    }
+
+    return {
+      isQuote: false,
+      confidence: strongName ? 'REVIEW' : 'NONE',
+      reason: strongName
+        ? 'Name looks like a quote but quotation structure was not detected.'
+        : 'No quotation structure detected.'
+    };
+
   } catch (err) {
-    // If Drive found it and the name strongly looks like a quote,
-    // include it for audit review rather than hiding it.
-    return true;
+    // Failure to inspect is never enough for an automatic add. Strong names
+    // remain audit candidates, but are not treated as confirmed quotes.
+    return {
+      isQuote: false,
+      confidence: 'REVIEW',
+      reason: 'Could not inspect workbook: ' + err.message
+    };
   }
 }
 
+
+function isLikelyPumaQuotation_(file) {
+  return classifyPumaQuotationFile_(file).isQuote;
+}
+
 /**
- * Writes quote audit rows to PUMA_AUDIT_ACTIONS.
+ * Writes quote audit rows to PUMA_QUOTE_AUDIT_ACTIONS.
  *
- * This intentionally clears PUMA_AUDIT_ACTIONS because this function is
+ * This intentionally clears PUMA_QUOTE_AUDIT_ACTIONS because this function is
  * a focused quote-sync report. If you want to combine workbook audit actions
  * and quote audit actions later, we can merge this with buildPumaAuditActions().
  */
@@ -613,7 +685,7 @@ function indexPumaHeaders_(headers, requiredHeaders) {
   requiredHeaders.forEach(h => {
     const i = headers.indexOf(h);
     if (i === -1) {
-      throw new Error(`Missing required column in PUMA_AUDIT_ACTIONS: ${h}`);
+      throw new Error(`Missing required column in PUMA_QUOTE_AUDIT_ACTIONS: ${h}`);
     }
     idx[h] = i;
   });
@@ -625,10 +697,16 @@ function indexPumaHeaders_(headers, requiredHeaders) {
  * Helper: normalize project names for matching.
  */
 function normalizePumaKey_(value) {
+  if (typeof pumaNormalizeProjectKey_ === 'function') {
+    return pumaNormalizeProjectKey_(value);
+  }
+
   return String(value || '')
     .toLowerCase()
     .replace(/\s+-\s+project tracker$/i, '')
     .replace(/\s+-\s+tasks$/i, '')
+    .replace(/\b(residence|project)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -658,13 +736,27 @@ function getCurrentOpenProjectFolderIds_() {
  * Helper: Check if expected Project Tracker and Tasks tabs exist for a project, to help prioritize which quote sync issues to review first.
  */
 function getPumaProjectSheetStatus_(ss, projectName) {
-  const trackerName = `${projectName} - Project Tracker`;
-  const tasksName = `${projectName} - Tasks`;
+  let trackerName = '';
+  let tasksName = '';
+
+  if (
+    typeof pumaBuildProjectRegistry_ === 'function' &&
+    typeof pumaResolveProjectWithRegistry_ === 'function'
+  ) {
+    const registry = pumaBuildProjectRegistry_(ss);
+    const resolution = pumaResolveProjectWithRegistry_(registry, projectName, {});
+    if (resolution.status === 'CONFIRMED') {
+      trackerName = resolution.trackerSheetName || '';
+      tasksName = trackerName
+        ? trackerName.replace(/ - Project Tracker$/i, ' - Tasks')
+        : '';
+    }
+  }
 
   return {
     trackerName,
-    trackerExists: !!ss.getSheetByName(trackerName),
-    tasksExists: !!ss.getSheetByName(tasksName)
+    trackerExists: !!(trackerName && ss.getSheetByName(trackerName)),
+    tasksExists: !!(tasksName && ss.getSheetByName(tasksName))
   };
 }
 
@@ -677,14 +769,4 @@ function formatPumaDateTime_(date) {
     Session.getScriptTimeZone(),
     'M/d/yyyy h:mm a'
   );
-}
-
-function testOpenProjectsParent() {
-  const folderId = '1S6m5hsxpkyt1GtcGWo1Bat-dXMCCsiIR'; // Willoughby Residence
-
-  const folder = Drive.Files.get(folderId, {
-    supportsAllDrives: true
-  });
-
-  Logger.log(JSON.stringify(folder, null, 2));
 }

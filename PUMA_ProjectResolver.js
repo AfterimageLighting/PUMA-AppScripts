@@ -200,6 +200,15 @@ function pumaBuildProjectRegistry_(ss) {
     .filter(n => !String(n).replace(PUMA_PROJECT_RESOLVER.TRACKER_SUFFIX, '').trim());
 
   const config = pumaReadTrackerConfig_(ss);
+  const openProjects = pumaReadOpenProjects_(ss);
+  const openProjectsByKey = {};
+  openProjects.forEach(rec => {
+    const key = pumaNormalizeProjectKey_(rec.project);
+    if (!key) return;
+    if (!openProjectsByKey[key]) openProjectsByKey[key] = [];
+    openProjectsByKey[key].push(rec);
+  });
+
   const configByTracker = {};
   const configTrackerMismatches = [];
 
@@ -310,6 +319,8 @@ function pumaBuildProjectRegistry_(ss) {
     trackerToProjectId: trackerToProjectId,
     normalizedToProjectIds: normalizedToProjectIds,
     aliasToProjectIds: aliasToProjectIds,
+    openProjects: openProjects,
+    openProjectsByKey: openProjectsByKey,
     malformedTrackers: malformedTrackers,
     configTrackerMismatches: pumaUniqueObjects_(configTrackerMismatches),
     historicalOverrideConflicts: hist.conflicts
@@ -340,6 +351,19 @@ function pumaChooseCanonicalName_(trackerBase, configProject) {
 }
 
 
+function pumaReadOpenProjects_(ss) {
+  const sh = pumaFindSheetByAnyName_(ss, PUMA_PROJECT_RESOLVER.OPEN_PROJECTS_NAMES);
+  if (!sh || sh.getLastRow() < 2) return [];
+
+  const values = sh.getRange(2, 1, sh.getLastRow() - 1, Math.min(2, sh.getLastColumn())).getValues();
+  return values.map((row, i) => ({
+    project: String(row[0] || '').trim(),
+    folderId: String(row[1] || '').trim(),
+    sourceRow: i + 2
+  })).filter(r => r.project && r.folderId);
+}
+
+
 function pumaReadTrackerConfig_(ss) {
   const sh = pumaFindSheetByAnyName_(ss, PUMA_PROJECT_RESOLVER.TRACKER_CONFIG_NAMES);
   if (!sh) return [];
@@ -349,9 +373,15 @@ function pumaReadTrackerConfig_(ss) {
 
   const headers = values[0].map(v => String(v || '').trim());
   const map = pumaHeaderMap_(headers);
+  const legacyEnableIdx =
+    map[pumaHeaderKey_('Enable?')] == null &&
+    pumaHeaderKey_(headers[1]) === pumaHeaderKey_('Project') &&
+    pumaHeaderKey_(headers[2]) === pumaHeaderKey_('Tracker Sheet Name')
+      ? 0
+      : -1;
 
   return values.slice(1).map(row => ({
-    enabled: pumaGetByHeader_(row, map, 'Enable?'),
+    enabled: legacyEnableIdx === 0 ? row[0] : pumaGetByHeader_(row, map, 'Enable?'),
     project: String(pumaGetByHeader_(row, map, 'Project') || '').trim(),
     trackerName: String(
       pumaGetByHeader_(row, map, 'Tracker Sheet Name') ||
@@ -476,6 +506,28 @@ function pumaResolveProjectWithRegistry_(registry, inputName, evidence) {
     }
   }
 
+  // If this name belongs to the current Open Projects manifest but has no
+  // existing tracker/alias, do not let generic PO/part evidence reroute it to
+  // some other project. It needs tracker setup/reconciliation first.
+  const openMatches = key ? (registry.openProjectsByKey[key] || []) : [];
+  if (openMatches.length === 1) {
+    result.status = 'REVIEW';
+    result.confidence = 'NONE';
+    result.method = 'OPEN_PROJECT_TRACKER_MISSING';
+    result.canonicalProject = openMatches[0].project;
+    result.reasons.push('Project exists in Open Projects but no existing tracker/alias resolves it.');
+    result.suggestions = [openMatches[0].project];
+    return result;
+  }
+  if (openMatches.length > 1) {
+    result.status = 'CONFLICT';
+    result.confidence = 'NONE';
+    result.method = 'OPEN_PROJECT_COLLISION';
+    result.conflicts.push('Multiple Open Projects rows normalize to the same project identity.');
+    result.suggestions = openMatches.map(x => x.project);
+    return result;
+  }
+
   // Independent operational evidence.
   const evidenceIds = pumaEvidenceProjectIds_(evidence);
   if (evidenceIds.confirmed.length === 1 && evidenceIds.conflicts.length === 0) {
@@ -510,6 +562,15 @@ function pumaResolveProjectWithRegistry_(registry, inputName, evidence) {
     result.confidence = 'SUGGESTION_ONLY';
     result.method = 'FUZZY_SUGGESTION';
     result.reasons.push('A similar project name exists, but fuzzy spelling alone is not allowed to confirm a write.');
+  } else if (evidenceIds.suggestions && evidenceIds.suggestions.length) {
+    result.status = 'REVIEW';
+    result.confidence = 'SUPPORTING_EVIDENCE_ONLY';
+    result.method = 'WEAK_OPERATIONAL_EVIDENCE';
+    result.suggestions = evidenceIds.suggestions
+      .map(id => registry.byId[id])
+      .filter(Boolean)
+      .map(p => ({project: p.canonicalName, tracker: p.trackerName}));
+    result.reasons = result.reasons.concat(evidenceIds.reasons || []);
   }
 
   return result;
@@ -523,19 +584,26 @@ function pumaEvidenceProjectIds_(evidence) {
   const suggestions = [];
   let method = '';
 
-  // Evidence providers add arrays of candidate project IDs.
-  const sources = [
-    ['PO_NUMBER', evidence.poProjectIds],
+  // Only multi-field evidence can CONFIRM. PO-only and Part-only are supporting
+  // signals because the same PO and same part can legitimately span projects.
+  const strongSources = [
+    ['PO_TYPE_PART_QTY', evidence.poTypePartQtyProjectIds],
+    ['PO_PART_QTY', evidence.poPartQtyProjectIds],
+    ['TYPE_PART_QTY', evidence.typePartQtyProjectIds]
+  ];
+
+  const weakSources = [
+    ['PO_TYPE_PART', evidence.poTypePartProjectIds],
     ['PO_AND_ITEM', evidence.poItemProjectIds],
     ['TYPE_AND_PART', evidence.typePartProjectIds],
+    ['PO_NUMBER', evidence.poProjectIds],
     ['PART_ONLY', evidence.partProjectIds]
   ];
 
   const strongSets = [];
-  sources.forEach(([label, ids]) => {
+  strongSources.forEach(([label, ids]) => {
     ids = [...new Set((ids || []).filter(Boolean))];
     if (!ids.length) return;
-
     if (ids.length === 1) {
       strongSets.push({label: label, id: ids[0]});
     } else {
@@ -545,22 +613,30 @@ function pumaEvidenceProjectIds_(evidence) {
   });
 
   const uniqueStrong = [...new Set(strongSets.map(x => x.id))];
-  if (uniqueStrong.length === 1) {
+  if (uniqueStrong.length === 1 && conflicts.length === 0) {
     confirmed.push(uniqueStrong[0]);
     const labels = strongSets.filter(x => x.id === uniqueStrong[0]).map(x => x.label);
-    method = labels.includes('PO_AND_ITEM')
-      ? 'PO_ITEM_CROSSCHECK'
-      : labels.includes('PO_NUMBER')
-        ? 'PO_CROSSCHECK'
-        : labels.includes('TYPE_AND_PART')
-          ? 'TYPE_PART_CROSSCHECK'
-          : 'PART_CROSSCHECK';
-
-    reasons.push('Independent tracker evidence uniquely identifies one project: ' + labels.join(', ') + '.');
+    method = labels.includes('PO_TYPE_PART_QTY')
+      ? 'PO_TYPE_PART_QTY_CROSSCHECK'
+      : labels.includes('PO_PART_QTY')
+        ? 'PO_PART_QTY_CROSSCHECK'
+        : 'TYPE_PART_QTY_CROSSCHECK';
+    reasons.push('Exact multi-field tracker evidence uniquely identifies one project: ' + labels.join(', ') + '.');
   } else if (uniqueStrong.length > 1) {
-    conflicts.push('Independent evidence sources point to different PUMA projects.');
+    conflicts.push('Strong evidence sources point to different PUMA projects.');
     uniqueStrong.forEach(id => suggestions.push(id));
   }
+
+  // Weak evidence may only suggest/reinforce; it never confirms by itself.
+  weakSources.forEach(([label, ids]) => {
+    ids = [...new Set((ids || []).filter(Boolean))];
+    if (ids.length === 1) {
+      suggestions.push(ids[0]);
+      reasons.push(label + ' is supporting evidence only.');
+    } else if (ids.length > 1) {
+      ids.forEach(id => suggestions.push(id));
+    }
+  });
 
   return {
     confirmed: confirmed,
@@ -571,7 +647,6 @@ function pumaEvidenceProjectIds_(evidence) {
   };
 }
 
-
 /* ========================================================================== */
 /* RAW PO operational evidence                                                 */
 /* ========================================================================== */
@@ -581,7 +656,11 @@ function pumaBuildTrackerEvidenceIndex_(ss, registry) {
     po: {},
     part: {},
     typePart: {},
-    poItem: {}
+    poItem: {},
+    poTypePart: {},
+    typePartQty: {},
+    poPartQty: {},
+    poTypePartQty: {}
   };
 
   registry.projects.forEach(project => {
@@ -603,11 +682,16 @@ function pumaBuildTrackerEvidenceIndex_(ss, registry) {
       const po = pumaNormalizePo_(pumaGetByHeader_(row, map, 'PO Number'));
       const part = pumaNormalizePart_(pumaGetByHeader_(row, map, 'Part Number'));
       const type = pumaNormalizeType_(pumaGetByHeader_(row, map, 'Type'));
+      const qty = pumaNormalizeQty_(pumaGetByHeader_(row, map, 'Quantity'));
 
       if (po) pumaIndexPush_(index.po, po, project.id);
       if (part) pumaIndexPush_(index.part, part, project.id);
       if (type && part) pumaIndexPush_(index.typePart, type + '||' + part, project.id);
       if (po && part) pumaIndexPush_(index.poItem, po + '||' + part, project.id);
+      if (po && type && part) pumaIndexPush_(index.poTypePart, po + '||' + type + '||' + part, project.id);
+      if (type && part && qty) pumaIndexPush_(index.typePartQty, type + '||' + part + '||' + qty, project.id);
+      if (po && part && qty) pumaIndexPush_(index.poPartQty, po + '||' + part + '||' + qty, project.id);
+      if (po && type && part && qty) pumaIndexPush_(index.poTypePartQty, po + '||' + type + '||' + part + '||' + qty, project.id);
     }
   });
 
@@ -626,16 +710,20 @@ function pumaGatherRawPoEvidence_(rawRecord, registry, index) {
   const po = pumaNormalizePo_(rawRecord.poNumber);
   const part = pumaNormalizePart_(rawRecord.itemName);
   const type = pumaNormalizeType_(rawRecord.itemType);
+  const qty = pumaNormalizeQty_(rawRecord.qty);
 
   return {
     rawTrackerOverride: rawRecord.rawTrackerOverride || '',
     poProjectIds: po ? (index.po[po] || []) : [],
     poItemProjectIds: (po && part) ? (index.poItem[po + '||' + part] || []) : [],
+    poTypePartProjectIds: (po && type && part) ? (index.poTypePart[po + '||' + type + '||' + part] || []) : [],
     typePartProjectIds: (type && part) ? (index.typePart[type + '||' + part] || []) : [],
-    partProjectIds: part ? (index.part[part] || []) : []
+    partProjectIds: part ? (index.part[part] || []) : [],
+    typePartQtyProjectIds: (type && part && qty) ? (index.typePartQty[type + '||' + part + '||' + qty] || []) : [],
+    poPartQtyProjectIds: (po && part && qty) ? (index.poPartQty[po + '||' + part + '||' + qty] || []) : [],
+    poTypePartQtyProjectIds: (po && type && part && qty) ? (index.poTypePartQty[po + '||' + type + '||' + part + '||' + qty] || []) : []
   };
 }
-
 
 /* ========================================================================== */
 /* Normalization + fuzzy suggestion helpers                                    */
@@ -836,6 +924,16 @@ function pumaNormalizeType_(value) {
     .toUpperCase()
     .replace(/\s+/g, '')
     .replace(/[^A-Z0-9.\-]/g, '');
+}
+
+
+function pumaNormalizeQty_(value) {
+  if (value === '' || value == null) return '';
+  const raw = String(value).replace(/[$,\s]/g, '').trim();
+  if (!raw) return '';
+  const n = Number(raw);
+  if (!isNaN(n)) return String(Math.round(n * 10000) / 10000);
+  return '';
 }
 
 

@@ -1,7 +1,7 @@
 /************************************
  * ESD central tracking
  * - syncESD(): rebuilds the ESD sheet from all "* - Project Tracker" sheets
- * - onEdit(e): when ESD is edited, push changes back to trackers
+ * - pumaHandleEsdSheetEdit_(e): when ESD is edited, push changes back to trackers
  ************************************/
 
 function getSheetGidByName(ss, sheetName) {
@@ -148,10 +148,10 @@ function syncESD() {
  * When you edit the ESD sheet, push changes back into the
  * corresponding "* - Project Tracker" row(s).
  *
- * NOTE: If you already have an onEdit(e) in this project,
- * merge this logic into that function instead of having two.
+ * Routed through the single project-level onEdit dispatcher.
  */
-function onEdit(e) {
+function pumaHandleEsdSheetEdit_(e) {
+  if (!e || !e.range) return;
   const range = e.range;
   const sheet = range.getSheet();
   const sheetName = sheet.getName();

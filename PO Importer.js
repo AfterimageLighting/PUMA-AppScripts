@@ -7,8 +7,9 @@ var PO_IMPORT_CONFIG = {
   UNMATCHED_SHEET_NAME: 'PO Unmatched',
   TRACKER_SUFFIX: ' - Project Tracker',
 
-  // Limit PO PDF lookup to this folder tree.
-  PO_ROOT_FOLDER_ID: '1VlCypDA_iF5dEUmA9c3E7ABYyS4-m6W2',
+  // Limit PO PDF lookup to an environment-appropriate folder tree.
+  LIVE_PO_ROOT_FOLDER_ID: '1VlCypDA_iF5dEUmA9c3E7ABYyS4-m6W2',
+  TEST_PO_ROOT_FOLDER_ID: '1EeexxItqTX896tq64lf1-8lBz2bqCBmH',
 
   RAW_HEADERS: {
     project: 'project_raw',
@@ -263,16 +264,6 @@ function applyRawPoImportToProjectTrackers() {
 /**
  * Menu
  */
-function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('PUMA')
-    .addItem('Audit RAW PO Project Resolution (Read Only)', 'pumaAuditRawPoProjectResolution')
-    .addSeparator()
-    .addItem('Apply RAW PO Import', 'applyRawPoImportToProjectTrackers')
-    .addToUi();
-}
-
-
 /**
  * Load tracker sheet into memory
  */
@@ -383,8 +374,13 @@ function findBestTrackerMatch_(trackerInfo, rawRecord, usedRowsMap) {
 
   var rawType = normalizeToken_(rawRecord.itemType);
   var rawPart = normalizePartNumber_(rawRecord.itemName);
-  var rawDesc = normalizeToken_(rawRecord.description);
   var rawQty = normalizeComparableNumber_(rawRecord.qty);
+
+  // Automatic tracker-row writes require an exact part number. Type is the
+  // preferred disambiguator. Family/description/type-only similarity is not
+  // strong enough to mutate a quoted row; those lines fall through to a
+  // PO_ONLY append for review instead.
+  if (!rawPart) return null;
 
   for (var i = 0; i < trackerInfo.rows.length; i++) {
     var tr = trackerInfo.rows[i];
@@ -392,49 +388,20 @@ function findBestTrackerMatch_(trackerInfo, rawRecord, usedRowsMap) {
 
     var trackerType = normalizeToken_(tr.type);
     var trackerPart = normalizePartNumber_(tr.partNumber);
-    var trackerDesc = normalizeToken_(tr.description);
     var trackerQty = normalizeComparableNumber_(tr.quantity);
 
+    var exactPart = !!(trackerPart && trackerPart === rawPart);
+    if (!exactPart) continue;
+
     var exactType = !!(trackerType && rawType && trackerType === rawType);
-    var exactPart = !!(trackerPart && rawPart && trackerPart === rawPart);
-    var familyPart = !!(
-      trackerPart && rawPart &&
-      !exactPart &&
-      partNumbersAreFamilyMatch_(tr.partNumber, rawRecord.itemName)
-    );
-    var exactDesc = !!(trackerDesc && rawDesc && trackerDesc === rawDesc);
+    var score = exactType ? 130 : 110;
+    var method = exactType ? 'TYPE+PART' : 'PART';
 
-    var score = 0;
-    var method = '';
-
-    if (exactType && exactPart) {
-      score = 130;
-      method = 'TYPE+PART';
-    } else if (exactPart) {
-      score = 110;
-      method = 'PART';
-    } else if (exactType && familyPart) {
-      score = 100;
-      method = 'TYPE+PART_FAMILY';
-    } else if (familyPart) {
-      score = 90;
-      method = 'PART_FAMILY';
-    } else if (exactType && exactDesc) {
-      score = 80;
-      method = 'TYPE+DESCRIPTION';
-    } else if (exactType) {
-      score = 75;
-      method = 'TYPE';
-    } else if (exactDesc) {
-      score = 60;
-      method = 'DESCRIPTION';
+    // Quantity may reinforce an already exact Type+Part match. It must not
+    // break a tie between repeated exact parts that belong to different Types.
+    if (exactType && rawQty !== '' && trackerQty !== '' && rawQty === trackerQty) {
+      score += 2;
     }
-
-    if (!score) continue;
-
-    // Quantity only breaks an otherwise equivalent match. Partial ordering is
-    // common, so quantity mismatch must not invalidate a strong Type/Part match.
-    if (rawQty !== '' && trackerQty !== '' && rawQty === trackerQty) score += 2;
 
     candidates.push({
       trackerRow: tr,
@@ -464,10 +431,6 @@ function findBestTrackerMatch_(trackerInfo, rawRecord, usedRowsMap) {
 
   return candidates[0];
 }
-
-/**
- * Update an existing tracker row
- */
 function applyMatchToTrackerRow_(sheet, trackerInfo, match, rawRecord, poPdfMap) {
   var headerMap = trackerInfo.headerMap;
   var rowNum = match.trackerRow.sheetRow;
@@ -581,7 +544,7 @@ function appendRawRecordToTracker_(sheet, trackerInfo, rawRecord, poPdfMap) {
   setRowValueByCol_(rowValues, statusCol, 'Ordered');
   setRowValueByCol_(rowValues, costCol, rawRecord.unitCost);
   setRowValueByCol_(rowValues, lineIdCol, generatePumaLineId_());
-  setRowValueByCol_(rowValues, reviewFlagCol, '');
+  setRowValueByCol_(rowValues, reviewFlagCol, 'PO_ONLY - no unique exact quoted-row match');
   setRowValueByCol_(rowValues, sourceTypeCol, 'PO_ONLY');
 
   var targetRange = sheet.getRange(targetRow, 1, 1, lastCol);
@@ -700,25 +663,25 @@ function setPoNumberRichLink_(range, displayText, url) {
 /**
  * Build PO PDF lookup map
  */
+function getPoPdfRootFolderId_() {
+  if (typeof pumaIsTestWorkbook_ === 'function' && pumaIsTestWorkbook_()) {
+    return PO_IMPORT_CONFIG.TEST_PO_ROOT_FOLDER_ID;
+  }
+  return PO_IMPORT_CONFIG.LIVE_PO_ROOT_FOLDER_ID;
+}
+
 function buildPoPdfMap_() {
   var map = {};
+  var rootFolderId = getPoPdfRootFolderId_();
 
-  if (PO_IMPORT_CONFIG.PO_ROOT_FOLDER_ID) {
-    var root = DriveApp.getFolderById(PO_IMPORT_CONFIG.PO_ROOT_FOLDER_ID);
+  if (rootFolderId) {
+    var root = DriveApp.getFolderById(rootFolderId);
     indexPoFilesInFolderRecursive_(root, map);
     return map;
   }
 
-  var files = DriveApp.searchFiles('mimeType = "application/pdf" and trashed = false');
-  while (files.hasNext()) {
-    var file = files.next();
-    var key = extractPoNumberFromFileName_(file.getName());
-    if (key && !map[key]) {
-      map[key] = file.getUrl();
-    }
-  }
-
-  return map;
+  // Fail closed: unrestricted Drive-wide PDF search is intentionally disabled.
+  throw new Error('PO PDF root folder is not configured.');
 }
 
 

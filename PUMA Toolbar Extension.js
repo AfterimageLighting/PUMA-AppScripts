@@ -19,18 +19,20 @@ function onOpen(e) {
     .addItem('Collapse All Projects', 'collapseDashboard')
     .addSeparator()
     .addItem('Refresh Dashboard', 'refreshDashboardProjectTrackers')
-    .addItem('Update Quote Closing Statuses', 'updateTrackerConfigQuoteStatuses')
-    .addItem('Update Pipeline', 'applyProbabilityFormattingToAllTrackers');
+    .addItem('Update Quote Closing Statuses', 'updateTrackerConfigQuoteStatuses');
 
   /* =========================
    * Tracker Configuration
    * ========================= */
   const trackerConfigMenu = ui.createMenu('Tracker Configuration')
-    .addItem('Update Open Projects', 'TrackerConfig')
-    .addItem(
-      'Sync ALL Configured Quotes → Trackers',
-      'syncAllConfiguredTrackers'
-    )
+    .addItem('Audit Open Projects Manifest (Read Only)', 'pumaAuditOpenProjectsManifest')
+    .addItem('Reconcile Open Projects Manifest', 'pumaSyncOpenProjectsManifest')
+    .addSeparator()
+    .addItem('Audit Missing Quotes (Read Only)', 'reportPumaMissingQuotes')
+    .addItem('Add Audited Missing Quotes to Config', 'autoAddPumaMissingQuotesToConfig')
+    .addSeparator()
+    .addItem('Rebuild Tracker Config from Open Projects', 'buildTrackerConfig')
+    .addSeparator()
     .addItem('Test Soft Match: Active Tracker vs Live Quotes', 'testSoftMatchActiveTrackerVsLiveQuotes')
     .addItem('Controlled Write: Soft Match IDs + Flags', 'controlledWriteSoftMatchActiveTrackerVsLiveQuotes')
     .addItem('Safe Sync Active Tracker', 'safeSyncActiveTracker')
@@ -46,9 +48,13 @@ function onOpen(e) {
    * Purchase Orders
    * ========================= */
   const poMenu = ui.createMenu('Purchase Orders')
-    .addItem('Import POs (Only New PDFs)', 'importPOs_onlyNew')
-    .addItem('Import POs (Scan Recent PDFs)', 'importPOs_scanAll')
-    .addItem('Reprocess Selected Log Rows', 'importPOs_reprocessSelectedLogRows');
+    .addItem('Audit RAW PO Project Resolution (Read Only)', 'pumaAuditRawPoProjectResolution')
+    .addItem('Audit Project Registry (Read Only)', 'pumaAuditProjectRegistryReadOnly')
+    .addSeparator()
+    .addItem('Apply RAW PO Import', 'applyRawPoImportToProjectTrackers')
+    .addSeparator()
+    .addItem('Install Daily PO Import Trigger', 'installDailyPoImportTrigger')
+    .addItem('Remove Daily PO Import Trigger', 'removeDailyPoImportTrigger');
 
   /* =========================
    * Assemble Menu
@@ -59,4 +65,9 @@ function onOpen(e) {
     .addSubMenu(esdMenu)
     .addSubMenu(poMenu)
     .addToUi();
+
+  // Separate navigation menu, dispatched from the single project onOpen.
+  if (typeof pumaAddNavigationMenu_ === 'function') {
+    pumaAddNavigationMenu_();
+  }
 }
