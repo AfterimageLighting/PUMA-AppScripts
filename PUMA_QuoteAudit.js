@@ -5,10 +5,10 @@
  * 1) REPORT ONLY:
  *    Scan Open Projects folders for quotation Google Sheets.
  *    Compare found quote spreadsheet IDs against Tracker config.
- *    Write missing quote actions to PUMA_AUDIT_ACTIONS.
+ *    Write missing quote actions to PUMA_QUOTE_AUDIT_ACTIONS.
  *
  * 2) AUTO ADD:
- *    Read PUMA_AUDIT_ACTIONS rows created by this report.
+ *    Read PUMA_QUOTE_AUDIT_ACTIONS rows created by this report.
  *    Add missing quote spreadsheet IDs to Tracker config.
  *
  * Requires:
@@ -28,7 +28,7 @@
 const PUMA_QUOTE_AUDIT = {
   OPEN_PROJECTS_SHEET: 'Open Projects',
   TRACKER_CONFIG_SHEET: 'Tracker config',
-  ACTIONS_SHEET: 'PUMA_AUDIT_ACTIONS',
+  ACTIONS_SHEET: 'PUMA_QUOTE_AUDIT_ACTIONS',
   OPEN_PROJECTS_PARENT_FOLDER_ID: '1acRZOrQUIzhoIav1Rw8d2GPosaDvNWx5',
 
   ACTION_CLASSIFICATION: 'QUOTE_SYNC',
@@ -212,7 +212,7 @@ function reportPumaMissingQuotes() {
 /**
  * AUTO ADD.
  *
- * Reads PUMA_AUDIT_ACTIONS and adds rows to Tracker config
+ * Reads PUMA_QUOTE_AUDIT_ACTIONS and adds rows to Tracker config
  * for missing quote IDs detected by reportPumaMissingQuotes().
  *
  * Only touches rows where:
@@ -538,9 +538,9 @@ function isLikelyPumaQuotation_(file) {
 }
 
 /**
- * Writes quote audit rows to PUMA_AUDIT_ACTIONS.
+ * Writes quote audit rows to PUMA_QUOTE_AUDIT_ACTIONS.
  *
- * This intentionally clears PUMA_AUDIT_ACTIONS because this function is
+ * This intentionally clears PUMA_QUOTE_AUDIT_ACTIONS because this function is
  * a focused quote-sync report. If you want to combine workbook audit actions
  * and quote audit actions later, we can merge this with buildPumaAuditActions().
  */
@@ -636,7 +636,7 @@ function indexPumaHeaders_(headers, requiredHeaders) {
   requiredHeaders.forEach(h => {
     const i = headers.indexOf(h);
     if (i === -1) {
-      throw new Error(`Missing required column in PUMA_AUDIT_ACTIONS: ${h}`);
+      throw new Error(`Missing required column in PUMA_QUOTE_AUDIT_ACTIONS: ${h}`);
     }
     idx[h] = i;
   });
