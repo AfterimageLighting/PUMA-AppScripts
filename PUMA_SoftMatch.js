@@ -27,7 +27,9 @@ const PUMA_SOFT_MATCH = {
     notes: ['Notes', 'Internal Notes'],
     pumaLineId: ['PUMA_LINE_ID'],
     fingerprint: ['PUMA_FINGERPRINT'],
-    reviewFlag: ['PUMA_REVIEW_FLAG']
+    reviewFlag: ['PUMA_REVIEW_FLAG'],
+    source: ['Source'],
+    sourceType: ['PUMA_SOURCE_TYPE']
   }
 };
 
@@ -99,8 +101,15 @@ function softMatchRows_(existingRows, incomingRows) {
   const results = [];
   const usedExistingIds = new Set();
 
-  const exactMap = buildExactMatchMap_(existingRows);
-  const typeMap = buildTypeMatchMap_(existingRows);
+  const matchableExistingRows = existingRows.filter(row => {
+    const sourceType = String(row.sourceType || '').trim().toUpperCase();
+    return sourceType !== 'PO_ONLY' &&
+           sourceType !== 'MANUAL' &&
+           sourceType !== 'UNKNOWN';
+  });
+
+  const exactMap = buildExactMatchMap_(matchableExistingRows);
+  const typeMap = buildTypeMatchMap_(matchableExistingRows);
 
   incomingRows.forEach(incoming => {
     const exactKey = buildQuoteFingerprint_(incoming);
@@ -213,6 +222,25 @@ function readTrackerRowsForSoftMatch_(sheet) {
 
     if (!type && !manufacturer && !partNumber && !qty) continue;
 
+    const source = getCellByIndex_(row, col.source);
+    const po = getCellByIndex_(row, col.po);
+    const explicitSourceType = String(getCellByIndex_(row, col.sourceType) || '').trim().toUpperCase();
+
+    let sourceType = explicitSourceType;
+    if (!sourceType) {
+      if (/quot/i.test(String(source || ''))) {
+        sourceType = 'QUOTE';
+      } else if (po) {
+        sourceType = 'PO_ONLY';
+      } else if (!source && type) {
+        sourceType = 'MANUAL';
+      } else {
+        // Legacy rows that cannot be classified confidently remain matchable,
+        // but removed rows will still be treated conservatively by Safe Sync.
+        sourceType = 'LEGACY';
+      }
+    }
+
     rows.push({
       matchId: `ROW_${r + 1}`,
       sourceRow: r + 1,
@@ -220,8 +248,10 @@ function readTrackerRowsForSoftMatch_(sheet) {
       manufacturer,
       partNumber,
       qty,
+      source,
+      sourceType,
       status: getCellByIndex_(row, col.status),
-      po: getCellByIndex_(row, col.po),
+      po,
       esd: getCellByIndex_(row, col.esd),
       notes: getCellByIndex_(row, col.notes),
       pumaLineId: getCellByIndex_(row, col.pumaLineId),
