@@ -373,9 +373,15 @@ function pumaReadTrackerConfig_(ss) {
 
   const headers = values[0].map(v => String(v || '').trim());
   const map = pumaHeaderMap_(headers);
+  const legacyEnableIdx =
+    map[pumaHeaderKey_('Enable?')] == null &&
+    pumaHeaderKey_(headers[1]) === pumaHeaderKey_('Project') &&
+    pumaHeaderKey_(headers[2]) === pumaHeaderKey_('Tracker Sheet Name')
+      ? 0
+      : -1;
 
   return values.slice(1).map(row => ({
-    enabled: pumaGetByHeader_(row, map, 'Enable?'),
+    enabled: legacyEnableIdx === 0 ? row[0] : pumaGetByHeader_(row, map, 'Enable?'),
     project: String(pumaGetByHeader_(row, map, 'Project') || '').trim(),
     trackerName: String(
       pumaGetByHeader_(row, map, 'Tracker Sheet Name') ||
