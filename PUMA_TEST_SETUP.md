@@ -25,16 +25,26 @@ The copied workbook also contains a visible `PUMA TEST CONTROL` tab.
 Google copies bound Apps Script code with a copied Google Sheet. The copied
 script is a separate Apps Script project.
 
-The PUMA TEST bound Script ID has now been captured and this TEST branch's
-`.clasp.json` is configured to that copied project:
+The verified bound Script IDs are stored separately:
 
-`1TBhtqb5-3L3z34ozM87-mlJmxNxkcWofyeScPnjlHkCRBIxKdXBpiDpp`
+- TEST: `.clasp.test.json`
+  `1TBhtqb5-3L3z34ozM87-mlJmxNxkcWofyeScPnjlHkCRBIxKdXBpiDpp`
+- Production: `.clasp.production.json`
+  `1ddj6ChwgU9bnUpO-by2EtkWFuQ2ZIno4lRwfLJOqt7ce6XQi-0kbWmMs`
 
-Production Script ID (must never be used on this stabilization branch):
-`1ddj6ChwgU9bnUpO-by2EtkWFuQ2ZIno4lRwfLJOqt7ce6XQi-0kbWmMs`
+The repository intentionally does **not** track an active `.clasp.json`.
+Before any Apps Script push, explicitly select the intended target:
 
-The stabilization CI explicitly rejects the production Script ID. The exact
-commit containing the TEST Script ID passes both push and pull-request checks.
+TEST:
+`python select_clasp_target.py test`
+
+Production:
+`python select_clasp_target.py production`
+
+That command generates a local, git-ignored `.clasp.json`. Confirm the target
+shown by the selector before running `clasp push`. CI verifies that the active
+file is not committed and that both stored target configs contain the exact
+verified Script IDs.
 
 ## Timezone
 
@@ -75,7 +85,7 @@ These are isolated TEST targets. Production targets remain unchanged.
 
 ## First test order
 
-1. Push this branch to the copied PUMA TEST Apps Script project only.
+1. Run `python select_clasp_target.py test`, verify the TEST target, then push to the copied PUMA TEST Apps Script project only.
 2. Reload PUMA TEST and confirm the PUMA menu loads with no authorization/runtime errors.
 3. Run `PUMA -> Purchase Orders -> Audit RAW PO Project Resolution (Read Only)`.
 4. Run the Open Projects manifest audit, config read/SafeSync dry test, missing-quotes report, and the separated quote/general audit outputs.
