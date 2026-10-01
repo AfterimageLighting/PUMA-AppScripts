@@ -7,8 +7,9 @@ var PO_IMPORT_CONFIG = {
   UNMATCHED_SHEET_NAME: 'PO Unmatched',
   TRACKER_SUFFIX: ' - Project Tracker',
 
-  // Limit PO PDF lookup to this folder tree.
-  PO_ROOT_FOLDER_ID: '1VlCypDA_iF5dEUmA9c3E7ABYyS4-m6W2',
+  // Limit PO PDF lookup to an environment-appropriate folder tree.
+  LIVE_PO_ROOT_FOLDER_ID: '1VlCypDA_iF5dEUmA9c3E7ABYyS4-m6W2',
+  TEST_PO_ROOT_FOLDER_ID: '1EeexxItqTX896tq64lf1-8lBz2bqCBmH',
 
   RAW_HEADERS: {
     project: 'project_raw',
@@ -690,16 +691,25 @@ function setPoNumberRichLink_(range, displayText, url) {
 /**
  * Build PO PDF lookup map
  */
+function getPoPdfRootFolderId_() {
+  if (typeof pumaIsTestWorkbook_ === 'function' && pumaIsTestWorkbook_()) {
+    return PO_IMPORT_CONFIG.TEST_PO_ROOT_FOLDER_ID;
+  }
+  return PO_IMPORT_CONFIG.LIVE_PO_ROOT_FOLDER_ID;
+}
+
 function buildPoPdfMap_() {
   var map = {};
+  var rootFolderId = getPoPdfRootFolderId_();
 
-  if (PO_IMPORT_CONFIG.PO_ROOT_FOLDER_ID) {
-    var root = DriveApp.getFolderById(PO_IMPORT_CONFIG.PO_ROOT_FOLDER_ID);
+  if (rootFolderId) {
+    var root = DriveApp.getFolderById(rootFolderId);
     indexPoFilesInFolderRecursive_(root, map);
     return map;
   }
 
-  var files = DriveApp.searchFiles('mimeType = "application/pdf" and trashed = false');
+  // Fail closed: unrestricted Drive-wide PDF search is intentionally disabled.
+  throw new Error('PO PDF root folder is not configured.');
   while (files.hasNext()) {
     var file = files.next();
     var key = extractPoNumberFromFileName_(file.getName());
