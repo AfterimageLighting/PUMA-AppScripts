@@ -86,20 +86,39 @@ jobs:
             exit 1
           fi
           echo "No embedded Google Chat webhook URLs found."
-      - name: Prevent accidental production CLASP target
+      - name: Validate explicit CLASP target configs
         shell: bash
         run: |
           python - <<'PY'
-          import json, sys
-          obj=json.load(open(".clasp.json", encoding="utf-8"))
-          live="1ddj6ChwgU9bnUpO-by2EtkWFuQ2ZIno4lRwfLJOqt7ce6XQi-0kbWmMs"
-          script_id=obj.get("scriptId","")
-          test="1TBhtqb5-3L3z34ozM87-mlJmxNxkcWofyeScPnjlHkCRBIxKdXBpiDpp"
-          if script_id == live:
-              raise SystemExit("Stabilization branch points at LIVE Apps Script.")
-          if script_id != test:
-              raise SystemExit(f"Stabilization branch must point at the verified PUMA TEST Script ID, found: {script_id!r}")
-          print("Verified PUMA TEST Script ID:", script_id)
+          import json
+          from pathlib import Path
+          import subprocess
+
+          if Path(".clasp.json").exists():
+              raise SystemExit(".clasp.json must not be committed; select a target explicitly before deployment.")
+
+          tracked = subprocess.run(
+              ["git", "ls-files", "--error-unmatch", ".clasp.json"],
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.DEVNULL,
+          )
+          if tracked.returncode == 0:
+              raise SystemExit(".clasp.json is still tracked by git.")
+
+          expected = {
+              ".clasp.test.json": "1TBhtqb5-3L3z34ozM87-mlJmxNxkcWofyeScPnjlHkCRBIxKdXBpiDpp",
+              ".clasp.production.json": "1ddj6ChwgU9bnUpO-by2EtkWFuQ2ZIno4lRwfLJOqt7ce6XQi-0kbWmMs",
+          }
+          for path, script_id in expected.items():
+              obj = json.loads(Path(path).read_text(encoding="utf-8"))
+              if obj.get("scriptId") != script_id:
+                  raise SystemExit(f"{path} does not point at its verified Script ID.")
+
+          selector = Path("select_clasp_target.py").read_text(encoding="utf-8")
+          if '".clasp.json"' not in selector or '".clasp.test.json"' not in selector or '".clasp.production.json"' not in selector:
+              raise SystemExit("CLASP target selector is incomplete.")
+
+          print("Explicit TEST/production CLASP target separation validated.")
           PY
       - name: Check stabilization safety invariants
         shell: bash
