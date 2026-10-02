@@ -70,6 +70,9 @@ function reportPumaMissingQuotes() {
 
   const openProjects = readPumaOpenProjects_(ss);
   const config = readPumaTrackerConfig_(ss);
+  const registry = (typeof pumaBuildProjectRegistry_ === 'function')
+    ? pumaBuildProjectRegistry_(ss)
+    : null;
 
   const rows = [PUMA_QUOTE_AUDIT.ACTION_HEADERS];
   const now = new Date();
@@ -84,7 +87,7 @@ function reportPumaMissingQuotes() {
     let foundQuotes = [];
 
     try {
-      foundQuotes = listPumaQuoteSheetsInFolder_(project.folderId);
+      foundQuotes = listPumaQuoteSheetsInFolder_(project.folderId, config.allQuoteIds);
       scannedFolderIds.add(project.folderId);
     } catch (err) {
       rows.push([
@@ -109,8 +112,16 @@ function reportPumaMissingQuotes() {
       return;
     }
 
+    let configProjectKey = normalizePumaKey_(project.project);
+    if (registry && typeof pumaResolveProjectWithRegistry_ === 'function') {
+      const resolution = pumaResolveProjectWithRegistry_(registry, project.project, {});
+      if (resolution.status === 'CONFIRMED' && resolution.canonicalProject) {
+        configProjectKey = normalizePumaKey_(resolution.canonicalProject);
+      }
+    }
+
     const configuredQuoteIds =
-      config.byProject.get(normalizePumaKey_(project.project)) || new Set();
+      config.byProject.get(configProjectKey) || new Set();
 
     const foundCount = foundQuotes.length;
     let configuredCount = 0;
@@ -202,10 +213,10 @@ function reportPumaMissingQuotes() {
   Logger.log(message);
 
   try {
-    SpreadsheetApp.getUi().alert(message);
+    ss.toast(message, 'PUMA Quote Audit', 8);
   } catch (err) {
-    // Running from Apps Script editor, not the Sheet UI.}
-}
+    // Non-interactive execution; Logger output is sufficient.
+  }
 }
 
 
@@ -338,9 +349,9 @@ function autoAddPumaMissingQuotesToConfig() {
   Logger.log(message);
 
   try {
-    SpreadsheetApp.getUi().alert(message);
+    ss.toast(message, 'PUMA Quote Auto-add', 8);
   } catch (err) {
-    // Running from Apps Script editor, not the Sheet UI.
+    // Non-interactive execution; Logger output is sufficient.
   }
 }
 
@@ -430,8 +441,9 @@ function readPumaTrackerConfig_(ss) {
  * Shared Drive-safe listing of Google Sheets in a folder.
  * Then filters to likely quotation sheets.
  */
-function listPumaQuoteSheetsInFolder_(folderId) {
+function listPumaQuoteSheetsInFolder_(folderId, knownQuoteIds) {
   const results = [];
+  const configuredIds = knownQuoteIds || new Set();
   let pageToken;
 
   const q = [
@@ -451,6 +463,16 @@ function listPumaQuoteSheetsInFolder_(folderId) {
     });
 
     (resp.files || []).forEach(file => {
+      if (configuredIds.has(String(file.id))) {
+        results.push({
+          id: file.id,
+          name: file.name,
+          confidence: 'CONFIGURED',
+          reason: 'Spreadsheet ID already exists in Tracker config.'
+        });
+        return;
+      }
+
       const classification = classifyPumaQuotationFile_(file);
       if (classification.isQuote) {
         results.push({
@@ -483,11 +505,22 @@ function classifyPumaQuotationFile_(file) {
   const lower = name.toLowerCase();
 
   const obviousNegative =
-    /\b(billing|invoice|inventory|packing slip|receiving|delivery report|tracker|tasks|dashboard|summary)\b/i.test(lower) ||
+    /\b(billing|invoice|inventory|packing slip|receiving|delivery report|tracker|tasks|dashboard|summary|reconcilliation|reconciliation)\b/i.test(lower) ||
+    /^untitled spreadsheet$/i.test(lower) ||
     /^alig\b/i.test(lower);
 
+  const reviewOnlyName =
+    /(^copy of\b|\binternal use only\b|\bdraft\b|\bbackup\b|\barchive\b)/i.test(lower);
+
   const strongName =
-    /\b(quote|quotation|adder|architectural|decorative|heater|landscape lighting|lighting quotation|downlighting|reconcilliation|reconciliation)\b/i.test(lower);
+    /\b(quote|quotation|adder|architectural|decorative|heater|landscape lighting|lighting quotation|downlighting)\b/i.test(lower);
+
+  // Name-level exclusions are authoritative for automatic config additions.
+  // A billing/reconciliation/untitled sheet can resemble a quotation structurally,
+  // but it must never become an automatic Tracker Config source.
+  if (obviousNegative) {
+    return {isQuote: false, confidence: 'HIGH', reason: 'Non-quotation business sheet by name.'};
+  }
 
   try {
     const qss = SpreadsheetApp.openById(file.id);
@@ -540,6 +573,14 @@ function classifyPumaQuotationFile_(file) {
         (hasQuotationTitle || structuralHeaders || (hasQty && hasPart && hasPricing));
 
       if (populatedQuote) {
+        if (reviewOnlyName) {
+          return {
+            isQuote: false,
+            confidence: 'REVIEW',
+            reason: 'Quotation structure detected, but the file name indicates a copy/internal/draft artifact that requires human review.'
+          };
+        }
+
         return {
           isQuote: true,
           confidence: strongName ? 'HIGH' : 'STRUCTURAL',
@@ -556,10 +597,6 @@ function classifyPumaQuotationFile_(file) {
           reason: 'Quotation template/structure detected but no populated item rows.'
         };
       }
-    }
-
-    if (obviousNegative) {
-      return {isQuote: false, confidence: 'HIGH', reason: 'Non-quotation business sheet by name/structure.'};
     }
 
     return {

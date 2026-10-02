@@ -224,6 +224,17 @@ function readTrackerRowsForSoftMatch_(sheet) {
 
     const source = getCellByIndex_(row, col.source);
     const po = getCellByIndex_(row, col.po);
+
+    if (isNonProductQuoteLine_({
+      qty,
+      type,
+      description: getCellByIndex_(row, col.description),
+      manufacturer,
+      partNumber
+    })) {
+      continue;
+    }
+
     const explicitSourceType = String(getCellByIndex_(row, col.sourceType) || '').trim().toUpperCase();
 
     let sourceType = explicitSourceType;
@@ -557,6 +568,37 @@ function readLiveQuoteRowsForTracker_(ss, trackerSheetName) {
   return incoming;
 }
 
+function isNonProductQuoteLine_(line) {
+  const text = [
+    line && line.type,
+    line && line.description,
+    line && line.manufacturer,
+    line && line.partNumber
+  ].map(v => String(v || '').trim().toLowerCase()).join(' ');
+
+  if (!text) return false;
+
+  const keywords = [
+    'freight',
+    'shipping',
+    'delivery',
+    'sales tax',
+    'tax',
+    'handling',
+    'labor',
+    'service charge',
+    'surcharge',
+    'credit card fee',
+    'cc fee',
+    'processing fee',
+    'fees deducted',
+    'discount'
+  ];
+
+  return keywords.some(keyword => text.includes(keyword));
+}
+
+
 /**
  * Reads FIRST tab of quote spreadsheet.
  */
@@ -637,6 +679,16 @@ function readRowsFromQuoteSpreadsheet_(spreadsheetId, quoteName) {
     }
 
     blankStreak = 0;
+
+    if (isNonProductQuoteLine_({
+      qty,
+      type,
+      description,
+      manufacturer,
+      partNumber
+    })) {
+      continue;
+    }
 
     if (r > firstDataIndex && startBg && bg && bg !== startBg) {
       break;

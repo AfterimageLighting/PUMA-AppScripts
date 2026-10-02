@@ -122,6 +122,28 @@ function pumaAuditRawPoProjectResolution(options) {
       rawTrackerOverride: pumaGetByHeader_(row, col, 'Raw Tracker Override')
     };
 
+    if (isNonProductPoLine_(rawRecord)) {
+      out.push({
+        rawRow: rawRecord.sheetRow,
+        poNumber: String(rawRecord.poNumber || ''),
+        projectRaw: String(rawRecord.projectRaw || ''),
+        itemType: String(rawRecord.itemType || ''),
+        itemName: String(rawRecord.itemName || ''),
+        currentOutcome: String(rawRecord.currentOutcome || ''),
+        currentOverride: String(rawRecord.rawTrackerOverride || ''),
+        status: 'IGNORED',
+        canonicalProject: '',
+        trackerSheetName: '',
+        method: 'NON_PRODUCT_CHARGE',
+        confidence: 'N/A',
+        reasons: ['Importer filters this non-product charge before project resolution.'],
+        conflicts: [],
+        suggestions: []
+      });
+      if (limit && out.length >= limit) break;
+      continue;
+    }
+
     const evidence = pumaGatherRawPoEvidence_(rawRecord, registry, trackerEvidence);
     const resolution = pumaResolveProjectWithRegistry_(
       registry,
@@ -153,6 +175,107 @@ function pumaAuditRawPoProjectResolution(options) {
   const summary = pumaSummarizeResolutionResults_(out);
   console.log('[PUMA PROJECT RESOLVER] RAW PO dry-run summary: ' + JSON.stringify(summary));
   return out;
+}
+
+
+
+
+/**
+ * Trace one RAW_PO_IMPORT row to the exact tracker rows that provide
+ * PO / part / quantity evidence. READ ONLY.
+ */
+function pumaAuditRawPoRowReadOnly(rawRowNumber) {
+  const ss = SpreadsheetApp.getActive();
+  const raw = ss.getSheetByName(PUMA_PROJECT_RESOLVER.RAW_PO_SHEET_NAME);
+  if (!raw) throw new Error('RAW_PO_IMPORT sheet not found.');
+
+  const rowNumber = Number(rawRowNumber);
+  if (!Number.isInteger(rowNumber) || rowNumber < 2 || rowNumber > raw.getLastRow()) {
+    throw new Error('Invalid RAW_PO_IMPORT row: ' + rawRowNumber);
+  }
+
+  const lastCol = raw.getLastColumn();
+  const headers = raw.getRange(1, 1, 1, lastCol).getValues()[0]
+    .map(v => String(v || '').trim());
+  const col = pumaHeaderMap_(headers);
+  const row = raw.getRange(rowNumber, 1, 1, lastCol).getValues()[0];
+
+  const rawRecord = {
+    sheetRow: rowNumber,
+    projectRaw: pumaGetByHeader_(row, col, 'project_raw'),
+    poNumber: pumaGetByHeader_(row, col, 'po_number'),
+    itemName: pumaGetByHeader_(row, col, 'item_name'),
+    itemType: pumaGetByHeader_(row, col, 'item_type'),
+    description: pumaGetByHeader_(row, col, 'description'),
+    qty: pumaGetByHeader_(row, col, 'qty'),
+    unitCost: pumaGetByHeader_(row, col, 'unit_cost'),
+    vendor: pumaGetByHeader_(row, col, 'vendor'),
+    currentOutcome: pumaGetByHeader_(row, col, 'Outcome'),
+    rawTrackerOverride: pumaGetByHeader_(row, col, 'Raw Tracker Override')
+  };
+
+  const registry = pumaBuildProjectRegistry_(ss);
+  const index = pumaBuildTrackerEvidenceIndex_(ss, registry);
+  const evidence = pumaGatherRawPoEvidence_(rawRecord, registry, index);
+  const nonProduct = isNonProductPoLine_(rawRecord);
+  const resolution = nonProduct
+    ? {status: 'IGNORED', method: 'NON_PRODUCT_CHARGE', confidence: 'N/A'}
+    : pumaResolveProjectWithRegistry_(registry, rawRecord.projectRaw, evidence);
+
+  const po = pumaNormalizePo_(rawRecord.poNumber);
+  const part = pumaNormalizePart_(rawRecord.itemName);
+  const qty = pumaNormalizeQty_(rawRecord.qty);
+  const matchingTrackerRows = [];
+
+  registry.projects.forEach(project => {
+    const sh = ss.getSheetByName(project.trackerName);
+    if (!sh) return;
+    const values = sh.getDataRange().getDisplayValues();
+    const headerRow = pumaFindTrackerHeaderRowIndexReadOnly_(values);
+    if (headerRow === -1) return;
+    const map = pumaHeaderMap_(values[headerRow]);
+
+    for (let r = headerRow + 1; r < values.length; r++) {
+      const trackerRow = values[r];
+      const trackerPo = pumaNormalizePo_(pumaGetByHeader_(trackerRow, map, 'PO Number'));
+      const trackerPart = pumaNormalizePart_(pumaGetByHeader_(trackerRow, map, 'Part Number'));
+      const trackerQty = pumaNormalizeQty_(pumaGetByHeader_(trackerRow, map, 'Quantity'));
+      if (po && part && qty && trackerPo === po && trackerPart === part && trackerQty === qty) {
+        matchingTrackerRows.push({
+          project: project.canonicalName,
+          tracker: project.trackerName,
+          sheetRow: r + 1,
+          type: pumaGetByHeader_(trackerRow, map, 'Type'),
+          partNumber: pumaGetByHeader_(trackerRow, map, 'Part Number'),
+          quantity: pumaGetByHeader_(trackerRow, map, 'Quantity'),
+          poNumber: pumaGetByHeader_(trackerRow, map, 'PO Number'),
+          status: pumaGetByHeader_(trackerRow, map, 'Status'),
+          sourceType: pumaGetByHeader_(trackerRow, map, 'PUMA_SOURCE_TYPE')
+        });
+      }
+    }
+  });
+
+  const evidenceProjects = {};
+  Object.keys(evidence).forEach(key => {
+    const value = evidence[key];
+    if (Array.isArray(value)) {
+      evidenceProjects[key] = value.map(id => {
+        const project = registry.byId[id];
+        return project ? project.canonicalName : id;
+      });
+    } else {
+      evidenceProjects[key] = value;
+    }
+  });
+
+  return {
+    rawRecord: rawRecord,
+    nonProduct: nonProduct,
+    evidenceProjects: evidenceProjects,
+    resolution: resolution,
+    matchingTrackerRows: matchingTrackerRows
+  };
 }
 
 
@@ -961,7 +1084,7 @@ function pumaUniqueObjects_(rows) {
 
 
 function pumaSummarizeResolutionResults_(rows) {
-  const out = {total: rows.length, confirmed: 0, review: 0, conflict: 0, unknown: 0};
+  const out = {total: rows.length, confirmed: 0, review: 0, conflict: 0, unknown: 0, ignored: 0};
   rows.forEach(r => {
     const k = String(r.status || '').toLowerCase();
     if (out[k] != null) out[k]++;

@@ -80,12 +80,87 @@ function pumaRunResolverUnitTests() {
   );
 
   assertTrue(
+    'Sales tax is a non-product line',
+    isNonProductPoLine_({
+      itemName: 'TN Sales Tax - 9.25%',
+      itemType: 'Sales Tax-Knox County',
+      description: ''
+    })
+  );
+
+  assertTrue(
+    'CC fee surcharge is a non-product line',
+    isNonProductPoLine_({
+      itemName: 'Surcharges',
+      itemType: 'CC fee',
+      description: ''
+    })
+  );
+
+  assertTrue(
+    'Fees deducted surcharge is a non-product line',
+    isNonProductPoLine_({
+      itemName: 'Surcharges',
+      itemType: 'Fees deducted',
+      description: ''
+    })
+  );
+
+  assertTrue(
     'Physical fixture is not a non-product line',
     !isNonProductPoLine_({
       itemName: 'E2SLB-OW',
       itemType: 'C1-2A-TRIM',
       description: '2 inch Adjustable LED Flangeless Square Trim'
     })
+  );
+
+  assertTrue(
+    'Quote freight is excluded from Safe Sync',
+    isNonProductQuoteLine_({
+      qty: 1,
+      type: '',
+      description: 'Freight and Shipping',
+      manufacturer: '',
+      partNumber: ''
+    })
+  );
+
+  assertTrue(
+    'Quote CC fee is excluded from Safe Sync',
+    isNonProductQuoteLine_({
+      qty: 1,
+      type: 'CC fee',
+      description: '3.5% processing fee',
+      manufacturer: '',
+      partNumber: ''
+    })
+  );
+
+  assertTrue(
+    'Physical quote fixture remains syncable',
+    !isNonProductQuoteLine_({
+      qty: 13,
+      type: '',
+      description: 'Laguna Large Linear Chandelier',
+      manufacturer: 'Visual Comfort',
+      partNumber: 'CC1712BBS'
+    })
+  );
+
+  assertTrue(
+    'Billing spreadsheet is never auto-classified as a quote',
+    !classifyPumaQuotationFile_({name: 'Colquitt residence Billing', id: 'not-opened'}).isQuote
+  );
+
+  assertTrue(
+    'Reconciliation spreadsheet is never auto-classified as a quote',
+    !classifyPumaQuotationFile_({name: 'Compton Reconciliation', id: 'not-opened'}).isQuote
+  );
+
+  assertTrue(
+    'Untitled spreadsheet is never auto-classified as a quote',
+    !classifyPumaQuotationFile_({name: 'Untitled spreadsheet', id: 'not-opened'}).isQuote
   );
 
   var trackerInfo = {

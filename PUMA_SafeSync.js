@@ -133,6 +133,171 @@ function safeSyncActiveTracker() {
   );
 }
 
+
+
+/**
+ * READ-ONLY Safe Sync simulation across enabled Tracker config destinations.
+ * Uses the same quote reader + soft-match engine as Safe Sync, but performs no writes.
+ */
+function pumaSafeSyncDryRunReadOnly() {
+  const ss = SpreadsheetApp.getActive();
+  const config = ss.getSheetByName('Tracker config') || ss.getSheetByName('Tracker Config');
+  if (!config) throw new Error('Tracker config sheet not found.');
+
+  const values = config.getDataRange().getValues();
+  if (values.length < 2) return {trackers: [], totals: {}};
+
+  const headers = values[0].map(h => String(h || '').trim());
+  let enableIdx = findHeaderByAliases_(headers, ['Enable?', 'Enable', 'Enabled']);
+  const projectIdx = findHeaderByAliases_(headers, ['Project']);
+  const trackerIdx = findHeaderByAliases_(headers, ['Tracker Sheet Name', 'trackerName', 'Tracker Name', 'Tracker']);
+
+  if (enableIdx === -1 && projectIdx === 1 && trackerIdx === 2) enableIdx = 0;
+  if (enableIdx === -1 || trackerIdx === -1) {
+    throw new Error('Tracker config is missing Enable? or Tracker Sheet Name.');
+  }
+
+  const enabledTrackers = [];
+  const seen = {};
+  for (let r = 1; r < values.length; r++) {
+    const enabled = values[r][enableIdx] === true ||
+      String(values[r][enableIdx] || '').trim().toLowerCase() === 'true';
+    const trackerName = String(values[r][trackerIdx] || '').trim();
+    if (!enabled || !trackerName || seen[trackerName]) continue;
+    seen[trackerName] = true;
+    enabledTrackers.push(trackerName);
+  }
+
+  const totals = {
+    trackers: enabledTrackers.length,
+    ok: 0,
+    errors: 0,
+    existingRows: 0,
+    incomingRows: 0,
+    exactMatches: 0,
+    softMatches: 0,
+    ambiguousMatches: 0,
+    newLines: 0,
+    quoteRowsWouldZero: 0,
+    nonQuoteRowsWouldPreserve: 0
+  };
+
+  const trackers = enabledTrackers.map(trackerName => {
+    const tracker = ss.getSheetByName(trackerName);
+    if (!tracker) {
+      totals.errors++;
+      return {tracker: trackerName, ok: false, error: 'Tracker sheet not found.'};
+    }
+
+    try {
+      const existingRows = readTrackerRowsForSoftMatch_(tracker);
+      const incomingRows = readLiveQuoteRowsForTracker_(ss, trackerName);
+      const results = softMatchRows_(existingRows, incomingRows);
+
+      const summary = {
+        exactMatches: 0,
+        softMatches: 0,
+        ambiguousMatches: 0,
+        newLines: 0,
+        quoteRowsWouldZero: 0,
+        nonQuoteRowsWouldPreserve: 0
+      };
+
+      results.forEach(result => {
+        if (result.tier === 'EXACT_MATCH') summary.exactMatches++;
+        else if (result.tier === 'SOFT_MATCH_TYPE') summary.softMatches++;
+        else if (result.tier === 'AMBIGUOUS_TYPE_MATCH') summary.ambiguousMatches++;
+        else if (result.tier === 'NEW_LINE') summary.newLines++;
+        else if (result.tier === 'REMOVED_OR_SUPERSEDED') {
+          const sourceType = String((result.existing && result.existing.sourceType) || '').trim().toUpperCase();
+          if (sourceType === 'QUOTE') summary.quoteRowsWouldZero++;
+          else summary.nonQuoteRowsWouldPreserve++;
+        }
+      });
+
+      totals.ok++;
+      totals.existingRows += existingRows.length;
+      totals.incomingRows += incomingRows.length;
+      Object.keys(summary).forEach(k => totals[k] += summary[k]);
+
+      return {
+        tracker: trackerName,
+        ok: true,
+        existingRows: existingRows.length,
+        incomingRows: incomingRows.length,
+        summary: summary
+      };
+    } catch (err) {
+      totals.errors++;
+      return {
+        tracker: trackerName,
+        ok: false,
+        error: String(err && err.message ? err.message : err)
+      };
+    }
+  });
+
+  return {trackers: trackers, totals: totals};
+}
+
+
+
+
+/**
+ * READ-ONLY detailed Safe Sync simulation for one tracker.
+ */
+function pumaSafeSyncTrackerDryRunReadOnly(trackerName) {
+  const ss = SpreadsheetApp.getActive();
+  const tracker = ss.getSheetByName(String(trackerName || '').trim());
+  if (!tracker) throw new Error('Tracker sheet not found: ' + trackerName);
+
+  const existingRows = readTrackerRowsForSoftMatch_(tracker);
+  const incomingRows = readLiveQuoteRowsForTracker_(ss, tracker.getName());
+  const results = softMatchRows_(existingRows, incomingRows);
+
+  const details = results
+    .filter(r => r.tier !== 'EXACT_MATCH')
+    .map(r => ({
+      tier: r.tier,
+      action: r.action,
+      confidence: r.confidence,
+      reason: r.reason,
+      reviewFlag: r.reviewFlag || '',
+      existing: r.existing ? {
+        sourceRow: r.existing.sourceRow,
+        type: r.existing.type,
+        manufacturer: r.existing.manufacturer,
+        partNumber: r.existing.partNumber,
+        qty: r.existing.qty,
+        sourceType: r.existing.sourceType,
+        status: r.existing.status,
+        po: r.existing.po,
+        source: r.existing.source
+      } : null,
+      incoming: r.incoming ? {
+        type: r.incoming.type,
+        manufacturer: r.incoming.manufacturer,
+        partNumber: r.incoming.partNumber,
+        qty: r.incoming.qty,
+        source: r.incoming.source,
+        quoteName: r.incoming.quoteName
+      } : null
+    }));
+
+  return {
+    tracker: tracker.getName(),
+    existingRows: existingRows.length,
+    incomingRows: incomingRows.length,
+    nonExactCount: details.length,
+    details: details
+  };
+}
+
+
+
+
+
+
 function createTrackerBackup_(ss, tracker) {
   const name = tracker.getName();
   const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH.mm');
