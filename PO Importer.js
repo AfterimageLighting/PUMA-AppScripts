@@ -55,6 +55,11 @@ var PO_IMPORT_CONFIG = {
     'handling',
     'labor',
     'service charge',
+    'surcharge',
+    'credit card fee',
+    'cc fee',
+    'processing fee',
+    'fees deducted',
     'discount'
   ],
 
@@ -664,10 +669,22 @@ function setPoNumberRichLink_(range, displayText, url) {
  * Build PO PDF lookup map
  */
 function getPoPdfRootFolderId_() {
-  if (typeof pumaIsTestWorkbook_ === 'function' && pumaIsTestWorkbook_()) {
+  var activeId = '';
+  try {
+    activeId = SpreadsheetApp.getActive().getId();
+  } catch (err) {
+    throw new Error('Cannot determine active PUMA workbook; refusing PO PDF folder access.');
+  }
+
+  if (activeId === PUMA.SETTINGS.TEST_SPREADSHEET_ID) {
     return PO_IMPORT_CONFIG.TEST_PO_ROOT_FOLDER_ID;
   }
-  return PO_IMPORT_CONFIG.LIVE_PO_ROOT_FOLDER_ID;
+
+  if (activeId === PUMA.SETTINGS.PRODUCTION_SPREADSHEET_ID) {
+    return PO_IMPORT_CONFIG.LIVE_PO_ROOT_FOLDER_ID;
+  }
+
+  throw new Error('Unknown PUMA workbook ID; refusing PO PDF folder access: ' + activeId);
 }
 
 function buildPoPdfMap_() {
@@ -969,6 +986,8 @@ function normalizeComparableNumber_(value) {
   var numberValue = Number(normalized);
   return isNaN(numberValue) ? normalized : String(Math.round(numberValue * 10000) / 10000);
 }
+
+
 
 function installDailyPoImportTrigger() {
   removeDailyPoImportTriggers_();
